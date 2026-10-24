@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: touchlink-relay
+    runtime: python
+    plan: free
+    rootDir: relay
+    buildCommand: pip install -r requirements.txt
+    startCommand: python relay_server.py --port $PORT
+    healthCheckPath: /api/relayinfo
+    autoDeploy: true

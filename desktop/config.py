@@ -1,0 +1,48 @@
+"""Cấu hình TouchLink — lưu/đọc config.json, sinh ID và mật khẩu."""
+import json
+import os
+import secrets
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(APP_DIR)
+CONFIG_PATH = os.path.join(APP_DIR, "config.json")
+
+VERSION = "1.0.0"
+DEFAULT_PORT = 8420
+
+DEFAULTS = {
+    "device_id": None,
+    "password_enc": None,
+    "port": DEFAULT_PORT,
+    "relay_url": "ws://127.0.0.1:8430/ws",
+    "relay_enabled": False,
+}
+
+
+def load():
+    cfg = dict(DEFAULTS)
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                cfg.update(data)
+        except Exception:
+            pass
+    return cfg
+
+
+def save(cfg):
+    tmp = {k: v for k, v in cfg.items() if not k.startswith("_")}
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(tmp, f, indent=2, ensure_ascii=False)
+
+
+def gen_device_id():
+    # 9 chữ số, tránh 0/1 dễ gây nhầm
+    return "".join(secrets.choice("23456789") for _ in range(9))
+
+
+def gen_password():
+    alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(6))

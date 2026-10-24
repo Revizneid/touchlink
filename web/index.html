@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<title>TouchLink Remote</title>
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ===== MÀN HÌNH ĐĂNG NHẬP ===== -->
+<div id="login" class="screen">
+  <div class="card">
+    <div class="logo-row">
+      <div class="logo-badge">TL</div>
+      <div>
+        <h1>TouchLink</h1>
+        <p class="sub">Điều khiển máy tính từ điện thoại</p>
+      </div>
+    </div>
+
+    <div class="mode-seg" id="mode-seg">
+      <button type="button" class="seg" id="seg-direct">🏠 Trực tiếp (LAN)</button>
+      <button type="button" class="seg" id="seg-relay">🌐 Qua relay</button>
+    </div>
+
+    <label class="field" id="field-host">
+      <span>Máy tính (IP:port) — cùng Wi-Fi</span>
+      <input id="f-host" placeholder="192.168.1.10:8420" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </label>
+    <label class="field hidden" id="field-relay">
+      <span>Địa chỉ relay (wss://…)</span>
+      <input id="f-relay" placeholder="wss://touchlink-relay.onrender.com/ws" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </label>
+    <label class="field">
+      <span>Mã máy (ID — 9 số, xem ở app máy tính)</span>
+      <input id="f-id" inputmode="numeric" placeholder="123456789" autocomplete="off">
+    </label>
+    <label class="field">
+      <span>Mật khẩu</span>
+      <input id="f-pass" type="password" placeholder="••••••" autocomplete="off">
+    </label>
+    <label class="check-row"><input type="checkbox" id="f-remember" checked><span>Ghi nhớ mật khẩu trên máy này</span></label>
+    <button id="btn-connect" class="btn primary">Kết nối</button>
+    <div id="login-error" class="error" hidden></div>
+    <p class="hint">Điện thoại và máy tính cùng Wi-Fi, hoặc dùng địa chỉ relay để kết nối qua internet. Mở app TouchLink trên máy tính để xem ID + mật khẩu.</p>
+  </div>
+</div>
+
+<!-- ===== MÀN HÌNH XEM & ĐIỀU KHIỂN ===== -->
+<div id="viewer" class="screen hidden">
+  <canvas id="screen"></canvas>
+
+  <div id="topbar">
+    <button class="tb" id="btn-exit" title="Ngắt kết nối">✕</button>
+    <div id="status" title="Trạng thái">…</div>
+    <div class="grow"></div>
+    <button class="tb" id="btn-mode" title="Chế độ chuột: trực tiếp / touchpad">🖱</button>
+    <button class="tb" id="btn-keys" title="Bàn phím">⌨</button>
+    <button class="tb" id="btn-quick" title="Phím tắt">⊞</button>
+    <button class="tb" id="btn-menu" title="Công cụ">⋯</button>
+  </div>
+
+  <div id="quickkeys" class="hidden">
+    <div class="qk-row">
+      <button class="qk mod" data-mod="ctrl">Ctrl</button>
+      <button class="qk mod" data-mod="alt">Alt</button>
+      <button class="qk mod" data-mod="shift">Shift</button>
+      <button class="qk mod" data-mod="win">Win</button>
+      <span class="qk-sep"></span>
+      <button class="qk" data-key="escape">Esc</button>
+      <button class="qk" data-key="tab">Tab</button>
+      <button class="qk" data-key="enter">Enter</button>
+      <button class="qk" data-key="backspace">⌫</button>
+      <button class="qk" data-key="up">↑</button>
+      <button class="qk" data-key="down">↓</button>
+      <button class="qk" data-key="left">←</button>
+      <button class="qk" data-key="right">→</button>
+      <button class="qk" data-key="delete">Del</button>
+    </div>
+    <div class="qk-row">
+      <button class="qk" data-combo="alt+tab">Alt+Tab</button>
+      <button class="qk" data-combo="win+d">Win+D</button>
+      <button class="qk" data-combo="win+e">Win+E</button>
+      <button class="qk" data-combo="win+l">Win+L</button>
+      <button class="qk" data-combo="ctrl+shift+escape">Task Mgr</button>
+      <button class="qk" data-combo="ctrl+alt+delete">Ctrl+Alt+Del</button>
+      <span class="qk-sep"></span>
+      <button class="qk" data-media="volumedown">🔉</button>
+      <button class="qk" data-media="volumeup">🔊</button>
+      <button class="qk" data-media="volumemute">🔇</button>
+      <button class="qk" data-media="playpause">⏯</button>
+      <button class="qk" data-media="prevtrack">⏮</button>
+      <button class="qk" data-media="nexttrack">⏭</button>
+    </div>
+  </div>
+
+  <div id="scrollstrip" hidden></div>
+
+  <textarea id="ime" rows="1" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Nhập text"></textarea>
+
+  <!-- Panel công cụ -->
+  <div id="sheet" class="panel hidden">
+    <div class="panel-head"><b>Công cụ &amp; cài đặt</b><button class="tb" id="sheet-close">✕</button></div>
+    <div class="panel-body">
+      <div class="set-row"><span>Chất lượng ảnh (JPEG)</span><input type="range" id="s-quality" min="30" max="90" step="5"><b id="v-quality"></b></div>
+      <div class="set-row"><span>Khung hình/giây</span><input type="range" id="s-fps" min="3" max="30" step="1"><b id="v-fps"></b></div>
+      <div class="set-row"><span>Độ phân giải %</span><input type="range" id="s-scale" min="40" max="100" step="10"><b id="v-scale"></b></div>
+      <div class="set-row"><span>Màn hình</span><select id="s-monitor"></select></div>
+      <div class="set-row"><span>Chế độ chuột</span>
+        <select id="s-mode">
+          <option value="direct">Trực tiếp (chạm = chấm chuột)</option>
+          <option value="touchpad">Touchpad (vuốt = di chuột)</option>
+        </select></div>
+      <div class="set-row"><span>Độ nhạy touchpad</span><input type="range" id="s-sens" min="5" max="30" step="1"><b id="v-sens"></b></div>
+      <div class="set-row"><span>Đảo chiều cuộn</span><input type="checkbox" id="s-invert"></div>
+      <div class="set-row"><span>Hai ngón khi đã thu phóng</span>
+        <select id="s-2finger">
+          <option value="auto">Tự động (kéo xem / cuộn)</option>
+          <option value="scroll">Luôn cuộn</option>
+          <option value="pan">Luôn kéo khung nhìn</option>
+        </select></div>
+      <div class="set-row"><span>Đồng bộ clipboard</span><input type="checkbox" id="s-cbsync"></div>
+      <div class="btn-row">
+        <button class="btn" id="btn-fullscreen">Toàn màn hình</button>
+        <button class="btn" id="btn-reconnect">Kết nối lại</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn" id="btn-clip">📋 Clipboard</button>
+        <button class="btn" id="btn-chat">💬 Trò chuyện</button>
+      </div>
+      <div class="meta" id="conn-meta"></div>
+    </div>
+  </div>
+
+  <!-- Panel clipboard -->
+  <div id="clip" class="panel hidden">
+    <div class="panel-head"><b>Clipboard</b><button class="tb" id="clip-close">✕</button></div>
+    <div class="panel-body">
+      <textarea id="clip-text" rows="6" placeholder="Nội dung clipboard…"></textarea>
+      <div class="btn-row">
+        <button class="btn" id="clip-get">⬇ Nhận từ máy tính</button>
+        <button class="btn primary" id="clip-set">⬆ Gửi tới máy tính</button>
+      </div>
+      <label class="check-row"><input type="checkbox" id="clip-auto"><span>Tự động đồng bộ (2 chiều)</span></label>
+    </div>
+  </div>
+
+  <!-- Panel chat -->
+  <div id="chat" class="panel hidden">
+    <div class="panel-head"><b>Trò chuyện với người ngồi máy tính</b><button class="tb" id="chat-close">✕</button></div>
+    <div class="panel-body">
+      <div id="chat-list"></div>
+      <div class="chat-input-row">
+        <input id="chat-input" placeholder="Nhắn tin…" autocomplete="off">
+        <button class="btn primary" id="chat-send">Gửi</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+  <div id="lost" class="lost hidden">
+    <div class="lost-card">
+      <p id="lost-msg">Mất kết nối</p>
+      <button class="btn primary" id="btn-relogin">Kết nối lại</button>
+    </div>
+  </div>
+</div>
+
+<script>
+window.addEventListener('DOMContentLoaded', function(){
+  var s = document.createElement('script');
+  s.src = '/static/app.js?v=1';
+  document.body.appendChild(s);
+});
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost','127.0.0.1'].includes(location.hostname))) {
+  navigator.serviceWorker.register('/sw.js').catch(function(){});
+}
+</script>
+</body>
+</html>
