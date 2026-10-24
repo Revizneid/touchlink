@@ -1,5 +1,19 @@
 # TouchLink — Điều khiển máy tính từ điện thoại (kiểu UltraViewer)
 
+**Đã triển khai trực tuyến:**
+
+| Thành phần | Địa chỉ |
+|---|---|
+| 📱 Mobile web (PWA) | **https://touchlink.vercel.app** |
+| 🌐 Relay server (miễn phí, Render) | **https://touchlink-relay.onrender.com** (WebSocket: `wss://touchlink-relay.onrender.com/ws`) |
+| 💾 Mã nguồn | https://github.com/Revizneid/touchlink |
+
+**Cách dùng nhanh:** mở `https://touchlink.vercel.app` trên điện thoại → chọn **🌐 Qua relay** →
+nhập ID + mật khẩu từ app trên máy tính → Kết nối. Trên máy tính bật relay:
+`python desktop/main.py --relay --relay-url wss://touchlink-relay.onrender.com/ws`
+(hoặc nhập trong cửa sổ app). Chế độ **🏠 Trực tiếp (LAN)** dùng khi mở trang do chính
+máy tính phục vụ (`http://<IP-máy-tính>:8420`).
+
 TouchLink gồm 2 phần:
 
 - **Desktop app** (Python, chạy trên Windows): chụp màn hình, cho phép điều khiển
