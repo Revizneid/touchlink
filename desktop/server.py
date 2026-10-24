@@ -2,13 +2,18 @@
 import asyncio
 import json
 import os
+import sys
 
 from aiohttp import WSMsgType, web
 
 import core
 from auth import RateLimiter
 
-WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+# Khi chạy exe (PyInstaller onefile): thư mục web/ được bundle trong sys._MEIPASS
+if getattr(sys, "frozen", False):
+    WEB_DIR = os.path.join(sys._MEIPASS, "web")
+else:
+    WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
 
 def _lan_ip():

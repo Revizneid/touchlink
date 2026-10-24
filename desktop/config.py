@@ -2,13 +2,17 @@
 import json
 import os
 import secrets
+import sys
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
-CONFIG_PATH = os.path.join(APP_DIR, "config.json")
-
 VERSION = "1.0.0"
 DEFAULT_PORT = 8420
+
+# Khi chạy dạng exe đóng gói (PyInstaller): config.json nằm CẠNH file exe (portable)
+FROZEN = bool(getattr(sys, "frozen", False))
+BASE_DIR = os.path.dirname(os.path.abspath(sys.executable)) if FROZEN else APP_DIR
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 DEFAULTS = {
     "device_id": None,

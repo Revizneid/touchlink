@@ -359,6 +359,21 @@ def main():
     if args.version:
         print("TouchLink", cfgmod.VERSION)
         return
+    try:  # exe windowed: stdout có thể None/cp1252 — ép UTF-8 để in tiếng Việt
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    if args.headless and getattr(sys, "frozen", False):
+        # exe --windowed không có console: cấp một console thật cho chế độ headless
+        try:
+            import ctypes
+            ctypes.windll.kernel32.AllocConsole()
+            sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+            sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+            sys.stdin = open("CONIN$", "r", encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     set_dpi_aware()
     if args.safe_test:
         inp.SAFE_TEST = True

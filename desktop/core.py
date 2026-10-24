@@ -45,7 +45,10 @@ def init(cfg_ref, events_q, rate_limiter=None):
 
 def log(msg):
     line = "[%s] %s" % (time.strftime("%H:%M:%S"), msg)
-    print(line, flush=True)
+    try:
+        print(line, flush=True)  # stdout có thể là None (exe GUI) hoặc không hỗ trợ UTF-8
+    except Exception:
+        pass
     if events is not None:
         try:
             events.put(("log", msg))

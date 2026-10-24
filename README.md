@@ -7,6 +7,7 @@
 | 📱 Mobile web (PWA) | **https://touchlink.vercel.app** |
 | 🌐 Relay server (miễn phí, Render) | **https://touchlink-relay.onrender.com** (WebSocket: `wss://touchlink-relay.onrender.com/ws`) |
 | 💾 Mã nguồn | https://github.com/Revizneid/touchlink |
+| 📦 **Portable exe (Windows)** | https://github.com/Revizneid/touchlink/releases — tải `TouchLink-Portable-win64.zip`, giải nén, chạy `TouchLink.exe` (không cần cài Python) |
 
 **Cách dùng nhanh:** mở `https://touchlink.vercel.app` trên điện thoại → chọn **🌐 Qua relay** →
 nhập ID + mật khẩu từ app trên máy tính → Kết nối. Trên máy tính bật relay:
@@ -43,11 +44,21 @@ Hai chế độ kết nối:
 
 ## Cài đặt & chạy (máy tính Windows)
 
+**Cách 1 — portable exe (khuyên dùng, không cần cài gì):**
+tải `TouchLink-Portable-win64.zip` từ [Releases](https://github.com/Revizneid/touchlink/releases),
+giải nén và chạy `TouchLink.exe`. File `config.json` tự tạo **cạnh exe** (portable — xóa là
+sinh lại ID/mật khẩu mới). Lần đầu Windows Firewall hỏi → chọn Allow (mạng Private).
+
+**Cách 2 — chạy từ mã nguồn:**
+
 ```bat
 run_desktop.bat
 ```
 (kịch bản tự tạo venv + cài thư viện lần đầu; hoặc tự làm: `python -m venv .venv` rồi
 `.venv\Scripts\pip install -r desktop\requirements.txt` rồi `.venv\Scripts\python desktop\main.py`)
+
+**Tự build exe:** sửa code xong, chạy `build_exe.bat` (dùng PyInstaller) → `dist\TouchLink.exe`.
+Thư mục `web/` được bundle vào exe; icon `assets/icon.ico`.
 
 Cửa sổ TouchLink hiện ra với:
 
