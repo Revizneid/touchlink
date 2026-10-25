@@ -16,6 +16,8 @@ class RelayClient:
         self.ws = None
         self.conn = None
         self.status = "stopped"
+        self._last_err = None
+        self._retry_delay = None
 
     async def start(self, cfg, events_q):
         if self.running:
@@ -65,6 +67,7 @@ class RelayClient:
                 await self.ws.send_json({"type": "register", "device_id": str(cfg.get("device_id", ""))})
                 self.status = "registered"
                 backoff = 2
+                self._last_err = None
                 core.log("Relay: đã đăng ký mã máy %s" % cfg.get("device_id"))
                 async for msg in self.ws:
                     if msg.type == WSMsgType.TEXT:
@@ -87,7 +90,8 @@ class RelayClient:
             if not self.running:
                 break
             self.status = "retrying"
-            await asyncio.sleep(backoff)
+            await asyncio.sleep(self._retry_delay or backoff)
+            self._retry_delay = None
             backoff = min(backoff * 2, 30)
 
     async def _on_text(self, cfg, data):
@@ -120,8 +124,14 @@ class RelayClient:
             if self.conn and isinstance(inner, dict):
                 asyncio.create_task(core.handle_client_message(self.conn, inner))
         elif t == "error":
-            core.log("Relay lỗi: %s" % data.get("message", "?"))
+            msg = str(data.get("message", "?"))
+            if msg != self._last_err:  # chỉ log 1 lần cho mỗi loại lỗi
+                self._last_err = msg
+                core.log("Relay: %s" % msg)
             self.status = "error"
+            if "đã đăng ký" in msg or "đã có máy khác" in msg:
+                # bản TouchLink khác đang giữ ID này → thử lại chậm hơn
+                self._retry_delay = 60
 
     async def _to_viewer_json(self, d):
         if self.ws and not self.ws.closed:

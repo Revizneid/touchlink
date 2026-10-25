@@ -115,14 +115,25 @@ async def async_main(cfg, events_q, started_evt):
     app = server_mod.make_app(cfg)
     runner = web.AppRunner(app)
     await runner.setup()
-    try:
-        site = web.TCPSite(runner, "0.0.0.0", int(cfg.get("port", cfgmod.DEFAULT_PORT)))
-        await site.start()
-    except OSError as e:
-        core.log("LỖI: không mở được cổng %s — %s" % (cfg.get("port"), e))
+    # Cổng ưu tiên = cfg['port']; nếu bận (app đang chạy lần 2, TIME_WAIT...) tự chuyển +1
+    base_port = int(cfg.get("port", cfgmod.DEFAULT_PORT))
+    port = None
+    for p in range(base_port, base_port + 20):
+        try:
+            site = web.TCPSite(runner, "0.0.0.0", p)
+            await site.start()
+            port = p
+            break
+        except OSError:
+            continue
+    if port is None:
+        core.log("LỖI: không mở được cổng nào từ %d tới %d (đều đang bận)" % (base_port, base_port + 19))
         started_evt.set()
         return
-    core.log("Server LAN chạy tại http://0.0.0.0:%s" % cfg.get("port"))
+    if port != base_port:
+        core.log("Cổng %d đang bận (có thể TouchLink đang chạy) → tự dùng cổng %d" % (base_port, port))
+    cfg["port"] = port  # chỉ trong bộ nhớ — GUI/QR hiện đúng cổng thật
+    core.log("Server LAN chạy tại http://0.0.0.0:%s" % port)
     stream_task = asyncio.create_task(core.stream_loop())
     try:
         await relay_client.start_if_enabled(cfg)
