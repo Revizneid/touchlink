@@ -78,6 +78,7 @@ class ClientConn:
 
     def __init__(self, name, send_json, send_bytes, close):
         self.name = name
+        self.since = time.strftime("%H:%M:%S")
         self._send_json = send_json
         self._send_bytes = send_bytes
         self._close = close
@@ -103,7 +104,13 @@ async def add_client(conn):
     clients.add(conn)
     broadcast_event("clients", len(clients))
     broadcast_event("log", "Viewer kết nối: %s (tổng %d)" % (conn.name, len(clients)))
+    broadcast_event("history", ("viewer", "Kết nối: %s" % conn.name))
     await broadcast_json({"type": "clients", "n": len(clients)})
+
+
+def clients_snapshot():
+    """Danh sách viewer đang kết nối cho GUI (an toàn gọi từ thread khác)."""
+    return [(getattr(c, "name", "?"), getattr(c, "since", "")) for c in list(clients)]
 
 
 async def remove_client(conn, reason=""):
@@ -112,6 +119,7 @@ async def remove_client(conn, reason=""):
         conn.alive = False
         broadcast_event("clients", len(clients))
         broadcast_event("log", "Viewer rời khỏi: %s %s (còn %d)" % (conn.name, reason, len(clients)))
+        broadcast_event("history", ("viewer", "Ngắt: %s %s" % (conn.name, reason)))
         await broadcast_json({"type": "clients", "n": len(clients)})
     try:
         await conn.close()

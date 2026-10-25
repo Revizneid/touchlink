@@ -19,17 +19,23 @@ class RelayClient:
         self._last_err = None
         self._retry_delay = None
 
+    def _set_status(self, status, history_text=None):
+        if self.status != status:
+            self.status = status
+            core.broadcast_event("relay", status)
+            if history_text:
+                core.broadcast_event("history", ("relay", history_text))
+
     async def start(self, cfg, events_q):
         if self.running:
             return
         self.running = True
-        self.status = "connecting"
+        self._set_status("connecting")
         core.log("Relay: đang kết nối tới %s" % cfg.get("relay_url"))
         self.task = asyncio.create_task(self._run(cfg))
 
     async def stop(self):
         self.running = False
-        self.status = "stopped"
         if self.task:
             self.task.cancel()
             try:
@@ -38,6 +44,7 @@ class RelayClient:
                 pass
             self.task = None
         await self._cleanup()
+        self._set_status("stopped")
         core.log("Relay: đã ngắt kết nối")
 
     async def _cleanup(self):
@@ -56,6 +63,7 @@ class RelayClient:
             except Exception:
                 pass
             self.session = None
+        self._set_status("stopped")
 
     async def _run(self, cfg):
         backoff = 2
@@ -69,6 +77,9 @@ class RelayClient:
                 backoff = 2
                 self._last_err = None
                 core.log("Relay: đã đăng ký mã máy %s" % cfg.get("device_id"))
+                core.broadcast_event("relay", "registered")
+                core.broadcast_event("history", ("relay",
+                    "Đã đăng ký mã máy %s trên relay" % cfg.get("device_id")))
                 async for msg in self.ws:
                     if msg.type == WSMsgType.TEXT:
                         await self._on_text(cfg, json.loads(msg.data))
@@ -89,7 +100,7 @@ class RelayClient:
                 await self._cleanup()
             if not self.running:
                 break
-            self.status = "retrying"
+            self._set_status("retrying")
             await asyncio.sleep(self._retry_delay or backoff)
             self._retry_delay = None
             backoff = min(backoff * 2, 30)
@@ -128,7 +139,8 @@ class RelayClient:
             if msg != self._last_err:  # chỉ log 1 lần cho mỗi loại lỗi
                 self._last_err = msg
                 core.log("Relay: %s" % msg)
-            self.status = "error"
+                core.broadcast_event("history", ("relay", "Lỗi: %s" % msg))
+            self._set_status("error")
             if "đã đăng ký" in msg or "đã có máy khác" in msg:
                 # bản TouchLink khác đang giữ ID này → thử lại chậm hơn
                 self._retry_delay = 60

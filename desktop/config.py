@@ -6,7 +6,7 @@ import sys
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 DEFAULT_PORT = 8420
 
 # Khi chạy dạng exe đóng gói (PyInstaller): config.json nằm CẠNH file exe (portable)

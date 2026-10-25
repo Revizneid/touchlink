@@ -1,4 +1,9 @@
-# TouchLink — Điều khiển máy tính từ điện thoại (kiểu UltraViewer)
+# TouchLink v2.0 — Điều khiển máy tính từ điện thoại (kiểu UltraViewer)
+
+Giao diện desktop v2.0: **control center** tối màu navy/blue chuyên nghiệp — sidebar
+điều hướng (Điều khiển từ xa · Màn hình chờ · Lịch sử kết nối · Danh sách thiết bị ·
+Cài đặt), dashboard với ID/mật khẩu/QR/trạng thái realtime, nhật ký hoạt động có màu
+theo sự kiện. Mobile web dùng chung hệ màu để đồng nhất nhận diện.
 
 **Đã triển khai trực tuyến:**
 
