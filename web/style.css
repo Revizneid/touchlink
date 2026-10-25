@@ -62,6 +62,9 @@ h1 { margin: 0; font-size: 22px; }
 #btn-connect { width: 100%; margin-top: 6px; padding: 13px; font-size: 16px; }
 .error { color: var(--err); font-size: 13.5px; margin-top: 10px; white-space: pre-line; }
 .hint { color: var(--dim); font-size: 12.5px; line-height: 1.5; margin-top: 14px; }
+.credit { color: var(--dim); font-size: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.credit a { color: var(--acc); text-decoration: none; font-weight: 600; }
+.credit a:active { opacity: .7; }
 
 /* ===== VIEWER ===== */
 #viewer { background: #000; }

@@ -1,4 +1,7 @@
-# TouchLink v2.0 — Điều khiển máy tính từ điện thoại (kiểu UltraViewer)
+# TouchLink v2.1 — Điều khiển máy tính từ điện thoại (kiểu UltraViewer)
+
+> **Tác giả / Credit:** [Revizneid](https://github.com/Revizneid) — mã nguồn mở MIT.
+> Xây dựng trên các thư viện mở: Python, aiohttp, mss, Pillow, pyautogui, qrcode, pyperclip.
 
 Giao diện desktop v2.0: **control center** tối màu navy/blue chuyên nghiệp — sidebar
 điều hướng (Điều khiển từ xa · Màn hình chờ · Lịch sử kết nối · Danh sách thiết bị ·

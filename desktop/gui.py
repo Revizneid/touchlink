@@ -203,7 +203,13 @@ class TouchLinkGUI(tk.Tk):
                  font=(F, 9), fg=C["dim"], bg=C["side"], anchor="w").pack(
             fill="x", padx=14, pady=4)
         tk.Label(side, text="ID: %s" % self.cfg.get("device_id", "—"), font=(MONO, 9),
-                 fg=C["acc"], bg=C["side"], anchor="w").pack(fill="x", padx=14, pady=(0, 10))
+                 fg=C["acc"], bg=C["side"], anchor="w").pack(fill="x", padx=14, pady=(0, 6))
+        credit = tk.Label(side, text="© Revizneid · github.com/\nRevizneid/touchlink",
+                          font=(F, 8), fg=C["dim"], bg=C["side"], anchor="w",
+                          justify="left", cursor="hand2")
+        credit.pack(fill="x", padx=14, pady=(0, 12))
+        credit.bind("<Button-1>", lambda e: self._open_link(
+            "https://github.com/Revizneid/touchlink"))
 
         self.container = tk.Frame(body, bg=C["bg"])
         self.container.pack(fill="both", expand=True)
@@ -657,6 +663,32 @@ class TouchLinkGUI(tk.Tk):
             tk.Label(box, text="⚠ Đang chạy SAFE-TEST: thao tác điều khiển KHÔNG được "
                      "thực thi thật.", font=(F, 9, "bold"), fg=C["warn"],
                      bg=C["card"]).pack(anchor="w", pady=(10, 0))
+        tk.Frame(box, bg=C["line"], height=1).pack(fill="x", pady=(14, 10))
+        tk.Label(box, text="💡 Credit", font=(F, 10, "bold"), fg=C["text"],
+                 bg=C["card"]).pack(anchor="w")
+        tk.Label(box, text="TouchLink v%s — phát triển bởi Revizneid" % cfgmod.VERSION,
+                 font=(F, 9), fg=C["dim"], bg=C["card"]).pack(anchor="w", pady=(4, 2))
+        links = tk.Frame(box, bg=C["card"])
+        links.pack(anchor="w")
+        for text, url in (("github.com/Revizneid/touchlink",
+                           "https://github.com/Revizneid/touchlink"),
+                          ("touchlink.vercel.app (mobile web)",
+                           "https://touchlink.vercel.app")):
+            l = tk.Label(links, text="🔗 " + text, font=(F, 9), fg=C["acc"],
+                         bg=C["card"], cursor="hand2")
+            l.pack(anchor="w", pady=1)
+            l.bind("<Button-1>", lambda e, u=url: self._open_link(u))
+        tk.Label(box, text="Cảm ơn các thư viện mã nguồn mở: Python, aiohttp, mss, "
+                 "Pillow, pyautogui, qrcode, pyperclip, tkinter.",
+                 font=(F, 8), fg=C["dim"], bg=C["card"], justify="left",
+                 wraplength=720).pack(anchor="w", pady=(6, 0))
+
+    def _open_link(self, url):
+        try:
+            import webbrowser
+            webbrowser.open(url)
+        except Exception as e:
+            self.toast("Không mở được liên kết: %s" % e, "err")
 
     def _save_port(self):
         try:
