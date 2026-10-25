@@ -18,8 +18,9 @@ DEFAULTS = {
     "device_id": None,
     "password_enc": None,
     "port": DEFAULT_PORT,
-    "relay_url": "ws://127.0.0.1:8430/ws",
-    "relay_enabled": False,
+    # Mặc định bật relay công cộng để mobile kết nối qua internet ngay lần chạy đầu
+    "relay_url": "wss://touchlink-relay.onrender.com/ws",
+    "relay_enabled": True,
 }
 
 

@@ -340,11 +340,12 @@ def run_gui(cfg, events_q):
                     log_insert(str(data))
                 elif kind == "clients":
                     var_viewers.set("Viewers: %s" % data)
-                    var_relay_status.set("Relay: %s" % relay_client.relay_client.status)
                 elif kind == "chat":
                     log_insert("[chat] %s: %s" % data)
         except queue.Empty:
             pass
+        var_relay_status.set("Relay: %s (%s)" % (
+            "bật" if var_relay_on.get() else "tắt", relay_client.relay_client.status))
         root.after(250, poll_events)
 
     log_insert("TouchLink sẵn sàng. Mở trên điện thoại: %s" % build_urls(cfg)[0])
