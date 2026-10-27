@@ -66,7 +66,7 @@ class RelayClient:
         self._set_status("stopped")
 
     async def _run(self, cfg):
-        backoff = 2
+        backoff = 1
         while self.running:
             try:
                 self.session = aiohttp.ClientSession()
@@ -74,7 +74,7 @@ class RelayClient:
                     cfg.get("relay_url"), heartbeat=20, timeout=aiohttp.ClientWSTimeout(ws_close=10))
                 await self.ws.send_json({"type": "register", "device_id": str(cfg.get("device_id", ""))})
                 self.status = "registered"
-                backoff = 2
+                backoff = 1
                 self._last_err = None
                 core.log("Relay: đã đăng ký mã máy %s" % cfg.get("device_id"))
                 core.broadcast_event("relay", "registered")

@@ -372,7 +372,10 @@ class TouchLinkGUI(tk.Tk):
         self.cb_mon.grid(row=1, column=1, columnspan=3, sticky="ew", padx=6)
         self.var_cbsync = tk.BooleanVar(value=bool(core.settings["clipboard_sync"]))
         ttk.Checkbutton(grid, text="Đồng bộ clipboard", variable=self.var_cbsync).grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=4)
+            row=2, column=0, sticky="w", pady=4)
+        self.var_awake = tk.BooleanVar(value=bool(core.settings.get("keep_awake", True)))
+        ttk.Checkbutton(grid, text="Ngăn máy tính tự sleep", variable=self.var_awake).grid(
+            row=2, column=1, columnspan=2, sticky="w", pady=4)
         self.btn(grid, "Áp dụng", self._apply_settings, primary=True).grid(
             row=2, column=3, sticky="e", pady=4)
 
@@ -459,16 +462,23 @@ class TouchLinkGUI(tk.Tk):
             if self.cb_mon.current() >= 0:
                 core.settings["monitor"] = self.mons[self.cb_mon.current()]["index"]
             core.settings["clipboard_sync"] = bool(self.var_cbsync.get())
+            core.settings["keep_awake"] = bool(self.var_awake.get())
             self.cfg.update(core.settings)
             cfgmod.save(self.cfg)
+            try:
+                import keepawake
+                keepawake.set_awake(bool(core.settings["keep_awake"]))
+            except Exception:
+                pass
             core.broadcast_event("settings", dict(core.settings))
-            core.log("Đã áp dụng cài đặt: fps=%s quality=%s scale=%s monitor=%s" % (
+            core.log("Đã áp dụng cài đặt: fps=%s quality=%s scale=%s monitor=%s keep_awake=%s" % (
                 core.settings["fps"], core.settings["quality"],
-                core.settings["scale"], core.settings["monitor"]))
+                core.settings["scale"], core.settings["monitor"],
+                core.settings["keep_awake"]))
             core.broadcast_event("history", ("setting",
-                "Áp dụng: fps=%s, quality=%s, monitor=%s" % (
+                "Áp dụng: fps=%s, quality=%s, monitor=%s, ngăn sleep=%s" % (
                     core.settings["fps"], core.settings["quality"],
-                    core.settings["monitor"])))
+                    core.settings["monitor"], core.settings["keep_awake"])))
             self.toast("Đã áp dụng cài đặt", "ok")
         except Exception as e:
             self.toast("Cài đặt lỗi: %s" % e, "err")

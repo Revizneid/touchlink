@@ -28,24 +28,26 @@
       <button type="button" class="seg" id="seg-relay">🌐 Qua relay</button>
     </div>
 
-    <label class="field" id="field-host">
-      <span>Máy tính (IP:port) — cùng Wi-Fi</span>
-      <input id="f-host" placeholder="192.168.1.10:8420" autocomplete="off" autocapitalize="off" spellcheck="false">
-    </label>
-    <label class="field hidden" id="field-relay">
-      <span>Địa chỉ relay (wss://…)</span>
-      <input id="f-relay" placeholder="wss://touchlink-relay.onrender.com/ws" autocomplete="off" autocapitalize="off" spellcheck="false">
-    </label>
-    <label class="field">
-      <span>Mã máy (ID — 9 số, xem ở app máy tính)</span>
-      <input id="f-id" inputmode="numeric" placeholder="123456789" autocomplete="off">
-    </label>
-    <label class="field">
-      <span>Mật khẩu</span>
-      <input id="f-pass" type="password" placeholder="••••••" autocomplete="off">
-    </label>
-    <label class="check-row"><input type="checkbox" id="f-remember" checked><span>Ghi nhớ mật khẩu trên máy này</span></label>
-    <button id="btn-connect" class="btn primary">Kết nối</button>
+    <form id="login-form">
+      <label class="field" id="field-host">
+        <span>Máy tính (IP:port) — cùng Wi-Fi</span>
+        <input id="f-host" placeholder="192.168.1.10:8420" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="next">
+      </label>
+      <label class="field hidden" id="field-relay">
+        <span>Địa chỉ relay (wss://…)</span>
+        <input id="f-relay" placeholder="wss://touchlink-relay.onrender.com/ws" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="next">
+      </label>
+      <label class="field">
+        <span>Mã máy (ID — 9 số, xem ở app máy tính)</span>
+        <input id="f-id" inputmode="numeric" placeholder="123456789" autocomplete="off" enterkeyhint="next">
+      </label>
+      <label class="field">
+        <span>Mật khẩu</span>
+        <input id="f-pass" type="password" placeholder="••••••" autocomplete="off" enterkeyhint="go">
+      </label>
+      <label class="check-row"><input type="checkbox" id="f-remember" checked><span>Ghi nhớ mật khẩu trên máy này</span></label>
+      <button id="btn-connect" class="btn primary" type="submit">Kết nối</button>
+    </form>
     <div id="login-error" class="error" hidden></div>
     <p class="hint">Điện thoại và máy tính cùng Wi-Fi, hoặc dùng địa chỉ relay để kết nối qua internet. Mở app TouchLink trên máy tính để xem ID + mật khẩu.</p>
     <p class="credit">TouchLink — phát triển bởi <a href="https://github.com/Revizneid/touchlink" target="_blank" rel="noopener">Revizneid</a> · <a href="https://github.com/Revizneid/touchlink" target="_blank" rel="noopener">mã nguồn trên GitHub</a></p>
@@ -126,6 +128,7 @@
           <option value="pan">Luôn kéo khung nhìn</option>
         </select></div>
       <div class="set-row"><span>Đồng bộ clipboard</span><input type="checkbox" id="s-cbsync"></div>
+      <div class="set-row"><span>Ngăn máy tính tự sleep</span><input type="checkbox" id="s-awake"></div>
       <div class="btn-row">
         <button class="btn" id="btn-fullscreen">Toàn màn hình</button>
         <button class="btn" id="btn-reconnect">Kết nối lại</button>

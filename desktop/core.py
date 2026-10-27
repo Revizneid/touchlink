@@ -19,7 +19,8 @@ VERSION = cfgmod.VERSION
 
 # Trạng thái dùng chung (chỉ chạm từ event-loop thread trừ khi nói rõ)
 clients = set()          # tập ClientConn đã xác thực
-settings = {"fps": 12, "quality": 60, "scale": 100, "monitor": 1, "clipboard_sync": True}
+settings = {"fps": 12, "quality": 60, "scale": 100, "monitor": 1,
+            "clipboard_sync": True, "keep_awake": True}
 meta = {"left": 0, "top": 0, "width": 0, "height": 0, "fw": 0, "fh": 0}
 cfg = {}                 # tham chiếu config (device_id, password_enc...)
 events = None            # queue.Queue cho GUI
@@ -29,6 +30,48 @@ limiter = None           # RateLimiter, gắn từ server.py
 _loop = None
 _pool = None
 _last_clip_hash = None
+screen_locked = False
+
+
+def _push_lock(locked):
+    global screen_locked
+    screen_locked = bool(locked)
+    if _loop is not None and _loop.is_running():
+        async def _b():
+            await broadcast_json({"type": "screen_locked", "locked": bool(locked)})
+        try:
+            asyncio.run_coroutine_threadsafe(_b(), _loop)
+        except Exception:
+            pass
+
+
+def _start_lock_watcher():
+    """Phát hiện màn hình Windows bị khóa (không thể xem/điều khiển từ phiên
+    người dùng do cơ chế bảo mật của Windows) và cảnh báo mọi viewer."""
+    def _watch():
+        global screen_locked
+        import ctypes
+        last = None
+        while True:
+            try:
+                h = ctypes.windll.user32.OpenInputDesktop(0, True, 0x0101)
+                locked = (h == 0)
+                if h:
+                    ctypes.windll.user32.CloseDesktop(h)
+            except Exception:
+                locked = False
+            if locked != last:
+                last = locked
+                _push_lock(locked)
+                if locked:
+                    log("⚠ Màn hình máy tính đang BỊ KHÓA — Windows không cho xem/"
+                        "điều khiển từ xa ở trạng thái này. Phải mở khóa trực tiếp.")
+                    broadcast_event("history", ("server", "Màn hình bị khóa"))
+                else:
+                    log("Màn hình đã mở khóa.")
+                    broadcast_event("history", ("server", "Màn hình mở khóa"))
+            time.sleep(2)
+    threading.Thread(target=_watch, daemon=True, name="touchlink-lock").start()
 
 
 def init(cfg_ref, events_q, rate_limiter=None):
@@ -36,11 +79,24 @@ def init(cfg_ref, events_q, rate_limiter=None):
     cfg = cfg_ref
     events = events_q
     limiter = rate_limiter
-    for k in ("fps", "quality", "scale", "monitor", "clipboard_sync"):
+    for k in ("fps", "quality", "scale", "monitor", "clipboard_sync", "keep_awake"):
         if k in cfg_ref:
             settings[k] = cfg_ref[k]
+    settings["keep_awake"] = bool(settings.get("keep_awake", True))
     _pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="capture")
     log("TouchLink core sẵn sàng (safe_test=%s)" % inp.SAFE_TEST)
+    try:
+        _start_lock_watcher()
+    except Exception as e:
+        log("lock-watcher lỗi: %s" % e)
+    try:
+        import keepawake
+        keepawake.set_awake(bool(settings["keep_awake"]))
+        log("Giữ máy thức (ngăn sleep): %s" % ("bật" if settings["keep_awake"] else "tắt"))
+        if keepawake.keeper.last_ok is False:
+            log("CẢNH BÁO: Windows từ chối SetThreadExecutionState")
+    except Exception as e:
+        log("keep-awake lỗi: %s" % e)
 
 
 def log(msg):
@@ -74,7 +130,12 @@ def broadcast_event(kind, data):
 
 
 class ClientConn:
-    """Kết nối viewer — bọc qua WebSocket LAN hoặc đường hầm relay."""
+    """Kết nối viewer — bọc qua WebSocket LAN hoặc đường hầm relay.
+
+    Frame màn hình đi qua mailbox "chỉ giữ frame mới nhất": viewer chậm
+    (mạng yếu) bỏ qua frame cũ, không bao giờ chặn viewer khác hay vòng
+    chụp màn hình (head-of-line blocking).
+    """
 
     def __init__(self, name, send_json, send_bytes, close):
         self.name = name
@@ -83,6 +144,36 @@ class ClientConn:
         self._send_bytes = send_bytes
         self._close = close
         self.alive = True
+        self._frame = None
+        self._frame_evt = asyncio.Event()
+        self._sender_task = None
+
+    def start_sender(self):
+        if self._sender_task is None:
+            self._sender_task = asyncio.get_running_loop().create_task(self._sender())
+
+    def offer_frame(self, data):
+        if not self.alive:
+            return
+        self._frame = data  # chỉ giữ frame mới nhất
+        self._frame_evt.set()
+
+    async def _sender(self):
+        while self.alive:
+            try:
+                await self._frame_evt.wait()
+            except asyncio.CancelledError:
+                return
+            if not self.alive:
+                return
+            self._frame_evt = asyncio.Event()
+            data = self._frame
+            self._frame = None
+            try:
+                await asyncio.wait_for(self.send_bytes(data), timeout=6)
+            except Exception:
+                asyncio.create_task(remove_client(self, "(kết nối chậm)"))
+                return
 
     async def send_json(self, data):
         if self.alive:
@@ -102,6 +193,7 @@ class ClientConn:
 
 async def add_client(conn):
     clients.add(conn)
+    conn.start_sender()
     broadcast_event("clients", len(clients))
     broadcast_event("log", "Viewer kết nối: %s (tổng %d)" % (conn.name, len(clients)))
     broadcast_event("history", ("viewer", "Kết nối: %s" % conn.name))
@@ -114,6 +206,9 @@ def clients_snapshot():
 
 
 async def remove_client(conn, reason=""):
+    t = getattr(conn, "_sender_task", None)
+    if t is not None:
+        t.cancel()
     if conn in clients:
         clients.discard(conn)
         conn.alive = False
@@ -132,7 +227,7 @@ async def broadcast_json(data, exclude=None):
         if c is exclude:
             continue
         try:
-            await c.send_json(data)
+            await asyncio.wait_for(c.send_json(data), timeout=3)
         except Exception:
             await remove_client(c, "(gửi lỗi)")
 
@@ -146,6 +241,7 @@ def auth_ok_payload():
         "version": VERSION,
         "settings": dict(settings),
         "monitors": list_monitors(),
+        "screen_locked": bool(screen_locked),
         "safe_test": inp.SAFE_TEST,
     }
 
@@ -239,10 +335,10 @@ async def _handle_input(msg):
 async def _handle_settings(conn, msg):
     s = msg.get("settings") or {}
     changed_geom = False
-    for k in ("fps", "quality", "scale", "monitor", "clipboard_sync"):
+    for k in ("fps", "quality", "scale", "monitor", "clipboard_sync", "keep_awake"):
         if k in s:
             try:
-                v = int(s[k]) if k != "clipboard_sync" else bool(s[k])
+                v = int(s[k]) if k not in ("clipboard_sync", "keep_awake") else bool(s[k])
             except Exception:
                 continue
             if k == "fps":
@@ -260,6 +356,15 @@ async def _handle_settings(conn, msg):
         cfgmod.save(cfg)
     except Exception:
         pass
+    if "keep_awake" in s:
+        try:
+            import keepawake
+            keepawake.set_awake(bool(settings["keep_awake"]))
+            state = "bật" if settings["keep_awake"] else "tắt"
+            log("Giữ máy thức (ngăn sleep): %s" % state)
+            broadcast_event("history", ("setting", "Ngăn máy tính sleep: %s" % state))
+        except Exception:
+            pass
     await broadcast_json({"type": "settings", "settings": dict(settings)})
     broadcast_event("settings", dict(settings))
     if changed_geom:
@@ -308,14 +413,9 @@ async def stream_loop():
                 meta.update(m)
                 payload = header_fmt.pack(1, m["fw"], m["fh"]) + jpeg
                 counters["frames"] += 1
-                dead = []
+                # mailbox: mỗi viewer tự lấy frame mới nhất, không chặn nhau
                 for c in list(clients):
-                    try:
-                        await asyncio.wait_for(c.send_bytes(payload), timeout=4)
-                    except Exception:
-                        dead.append(c)
-                for c in dead:
-                    await remove_client(c, "(chậm/không phản hồi)")
+                    c.offer_frame(payload)
                 # đồng bộ clipboard nếu bật
                 if settings.get("clipboard_sync"):
                     text = _clipboard_get()

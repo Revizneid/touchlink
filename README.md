@@ -46,9 +46,14 @@ Hai chế độ kết nối:
   Win+D/E/L, Task Manager, media (âm lượng, play/pause…)
 - Cuộn dọc/ngang (2 ngón hoặc dải cuộn bên phải), thu phóng/kéo khung nhìn bằng pinch
 - Đồng bộ clipboard 2 chiều, chat với người ngồi máy tính
+- **Ngăn máy tính tự sleep** (SetThreadExecutionState, bật/tắt được từ GUI và web)
+- Stream thích ứng: mỗi viewer có mailbox "frame mới nhất" — mạng yếu bỏ frame cũ,
+  không chặn người xem khác hay vòng chụp màn hình
+- Cảnh báo khi màn hình Windows bị khóa (không thể xem/điều khiển từ phiên người
+  dùng do cơ chế bảo mật Windows — phải mở khóa trực tiếp)
 - Bảo mật: mật khẩu (lưu mã hóa DPAPI), khóa IP thử sai 5 lần/5 phút, xác thực trên máy tính
   (relay không thấy mật khẩu dưới dạng kiểm chứng được)
-- PWA: cài lên màn hình chính Android, chạy fullscreen
+- PWA: cài lên màn hình chính Android, chạy fullscreen; đăng nhập bằng phím Enter
 
 ## Cài đặt & chạy (máy tính Windows)
 

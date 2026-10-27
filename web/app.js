@@ -21,7 +21,7 @@ var el = {
   toast: $('toast'), lost: $('lost'), lostMsg: $('lost-msg'), btnRelogin: $('btn-relogin'),
   sQuality: $('s-quality'), sFps: $('s-fps'), sScale: $('s-scale'), sMonitor: $('s-monitor'),
   sMode: $('s-mode'), sSens: $('s-sens'), sInvert: $('s-invert'), s2: $('s-2finger'),
-  sCbsync: $('s-cbsync'), btnFullscreen: $('btn-fullscreen'), btnReconnect: $('btn-reconnect'),
+  sCbsync: $('s-cbsync'), sAwake: $('s-awake'), btnFullscreen: $('btn-fullscreen'), btnReconnect: $('btn-reconnect'),
   btnClip: $('btn-clip'), btnChat: $('btn-chat'), connMeta: $('conn-meta'),
   vQuality: $('v-quality'), vFps: $('v-fps'), vScale: $('v-scale'), vSens: $('v-sens')
 };
@@ -43,7 +43,7 @@ var st = {
   invert: localStorage.getItem('tl_invert') === '1',
   twoFinger: localStorage.getItem('tl_2finger') || 'auto',
   sticky: {}, dragging: false, dragArmed: false,
-  srv: { fps: 12, quality: 60, scale: 100, monitor: 1, clipboard_sync: true },
+  srv: { fps: 12, quality: 60, scale: 100, monitor: 1, clipboard_sync: true, keep_awake: true },
   monitors: [], meta: {}
 };
 var bmp = null, redrawNeeded = false;
@@ -104,6 +104,7 @@ function connect(hostStr, id, pass) {
     return;
   }
   st.host = hostStr;
+  st.cred = { id: id, pass: pass };
   st.closing = false; st.authed = false;
   try { if (st.ws) { st.ws.onclose = null; st.ws.close(); } } catch (e) {}
   var ws;
@@ -137,6 +138,12 @@ function connect(hostStr, id, pass) {
       el.btnConnect.textContent = 'Kết nối';
       show(el.viewer, false); show(el.login, true);
       loginError((m.message || 'Sai thông tin đăng nhập'));
+    } else if (m.type === 'screen_locked') {
+      if (m.locked) {
+        toast('🔒 Máy tính đang KHÓA màn hình — Windows không cho xem/điều khiển từ xa ở trạng thái này. Cần mở khóa trực tiếp tại máy.', 7000);
+      } else {
+        toast('Máy tính đã mở khóa màn hình', 3000);
+      }
     } else if (m.type === 'pong') {
       pingMs = Math.max(0, Date.now() - (m.t || Date.now()));
     } else if (m.type === 'settings') {
@@ -157,6 +164,16 @@ function connect(hostStr, id, pass) {
       show(el.viewer, true); show(el.login, false);
       el.lostMsg.textContent = 'Mất kết nối với máy tính.';
       show(el.lost, true);
+      if (!st._retried) {  // mạng yếu: tự thử lại MỘT lần sau 4 giây
+        st._retried = true;
+        clearTimeout(st._retry_t);
+        st._retry_t = setTimeout(function () {
+          if (!st.closing) {
+            toast('Tự động kết nối lại…', 2500);
+            connect(st.host, st.cred.id, st.cred.pass);
+          }
+        }, 4000);
+      }
     }
     st.authed = false;
   };
@@ -181,6 +198,12 @@ function onAuthed(d) {
   fillMonitors();
   st.meta = { hostname: d.hostname, device_id: d.device_id, version: d.version, viewers: 1 };
   if (d.safe_test) toast('⚠ SAFE-TEST: thao tác không được thực thi thật', 4000);
+  if (d.screen_locked) {
+    setTimeout(function () {
+      toast('🔒 Máy tính đang KHÓA màn hình — không thể xem/điều khiển cho đến khi mở khóa trực tiếp.', 7000);
+    }, 800);
+  }
+  st._retried = false;
   updateMeta();
   show(el.scrollstrip, true);
   frameCount = 0; fpsShown = 0; pingMs = 0;
@@ -189,7 +212,7 @@ function onAuthed(d) {
 }
 
 function applyServerSettings(s) {
-  ['fps', 'quality', 'scale', 'monitor', 'clipboard_sync'].forEach(function (k) {
+  ['fps', 'quality', 'scale', 'monitor', 'clipboard_sync', 'keep_awake'].forEach(function (k) {
     if (k in s) st.srv[k] = s[k];
   });
   el.sFps.value = st.srv.fps; el.vFps.textContent = st.srv.fps;
@@ -197,6 +220,7 @@ function applyServerSettings(s) {
   el.sScale.value = st.srv.scale; el.vScale.textContent = st.srv.scale + '%';
   el.sCbsync.checked = !!st.srv.clipboard_sync;
   el.clipAuto.checked = !!st.srv.clipboard_sync;
+  if ('keep_awake' in st.srv) el.sAwake.checked = !!st.srv.keep_awake;
   if (el.sMonitor.selectedIndex >= 0 && el.sMonitor.value !== String(st.srv.monitor)) {
     var opt = Array.prototype.find.call(el.sMonitor.options, function (o) { return o.value === String(st.srv.monitor); });
     if (opt) el.sMonitor.value = opt.value;
@@ -644,6 +668,10 @@ el.sCbsync.addEventListener('change', function () {
   send({ type: 'settings', settings: { clipboard_sync: el.sCbsync.checked } });
   el.clipAuto.checked = el.sCbsync.checked;
 });
+el.sAwake.addEventListener('change', function () {
+  send({ type: 'settings', settings: { keep_awake: el.sAwake.checked } });
+  toast(el.sAwake.checked ? 'Máy tính sẽ không tự sleep khi TouchLink chạy' : 'Đã trả lại chế độ sleep của Windows');
+});
 function saveClientPrefs() {
   localStorage.setItem('tl_mode', st.mode);
   localStorage.setItem('tl_sens', String(st.sens));
@@ -770,7 +798,8 @@ function initLogin() {
   el.fRelay.value = params.get('relay') || localStorage.getItem('tl_relay') || DEFAULT_RELAY;
   el.fid.value = params.get('id') || localStorage.getItem('tl_id') || '';
   el.fpass.value = localStorage.getItem('tl_pass') || '';
-  el.btnConnect.addEventListener('click', function () {
+  $('login-form').addEventListener('submit', function (e) {
+    e.preventDefault();
     var id = el.fid.value.trim();
     var pass = el.fpass.value;
     if (!id) { loginError('Nhập mã máy (ID) — xem ở app TouchLink trên máy tính'); return; }
@@ -784,12 +813,20 @@ function initLogin() {
     if (el.fremember.checked) localStorage.setItem('tl_host', host);
     connect(host, id, pass);
   });
-  [el.fid, el.fpass, el.fRelay].forEach(function (i) {
-    i.addEventListener('keydown', function (e) { if (e.key === 'Enter') el.btnConnect.click(); });
-  });
   if (params.get('auto') === '1' && el.fid.value && el.fpass.value) {
     setTimeout(function () { el.btnConnect.click(); }, 250);
   }
+  // Enter trong ô ID/mật khẩu: mọi bàn phím (kể cả Android IME) đều gửi được form
+  [el.fid, el.fpass].forEach(function (i) {
+    i.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
+        e.preventDefault();
+        var form = $('login-form');
+        if (form.requestSubmit) form.requestSubmit();
+        else el.btnConnect.click();
+      }
+    });
+  });
 }
 initLogin();
 })();
