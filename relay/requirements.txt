@@ -1,1 +1,7 @@
-aiohttp>=3.9
+# Relay server dependencies
+aiohttp>=3.9          # HTTP + WebSocket server
+
+# Dev / test (không cần khi deploy production)
+# pytest>=8.0
+# pytest-asyncio>=0.23
+# pytest-aiohttp>=1.0

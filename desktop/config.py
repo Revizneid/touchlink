@@ -6,7 +6,7 @@ import sys
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 DEFAULT_PORT = 8420
 
 # Khi chạy dạng exe đóng gói (PyInstaller): config.json nằm CẠNH file exe (portable)
@@ -21,6 +21,10 @@ DEFAULTS = {
     # Mặc định bật relay công cộng để mobile kết nối qua internet ngay lần chạy đầu
     "relay_url": "wss://touchlink-relay.onrender.com/ws",
     "relay_enabled": True,
+    "require_e2e": True,
+    "allow_fixed_password": False,
+    "one_time_passcode_ttl_s": 600,
+    "one_time_passcode_length": 10,
 }
 
 

@@ -2,6 +2,12 @@
 (function () {
 'use strict';
 
+/* ---------- protocol constants (mirror of desktop/protocol.py) ---------- */
+var PROTOCOL_VERSION = 2;
+var PROTOCOL_CAPS = [
+  'screen_locked', 'keep_awake', 'multi_monitor', 'clipboard_sync', 'chat', 'tiles',
+];
+
 var $ = function (id) { return document.getElementById(id); };
 var el = {
   login: $('login'), viewer: $('viewer'),
@@ -44,7 +50,15 @@ var st = {
   twoFinger: localStorage.getItem('tl_2finger') || 'auto',
   sticky: {}, dragging: false, dragArmed: false,
   srv: { fps: 12, quality: 60, scale: 100, monitor: 1, clipboard_sync: true, keep_awake: true },
-  monitors: [], meta: {}
+  monitors: [], meta: {},
+  peerV: 1, peerCaps: [],
+  resumeToken: localStorage.getItem('tl_resumeToken') || '',
+  resumeDeviceId: localStorage.getItem('tl_resumeDeviceId') || '',
+  reconnectDelayMs: 1500,
+  reconnectAttempt: 0,
+  wakeLock: null,
+  // Tile state: canvas chứa full screenshot (vẽ tile lên trên)
+  tileCanvas: null, tileCtx: null,
 };
 var bmp = null, redrawNeeded = false;
 var frameCount = 0, fpsShown = 0, pingMs = 0, eventCount = 0;
@@ -67,6 +81,55 @@ function vib(ms) { try { navigator.vibrate && navigator.vibrate(ms); } catch (e)
 function show(elx, on) { elx.classList.toggle('hidden', !on); }
 function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 
+function getCompatProfile() {
+  var ua = navigator.userAgent || '';
+  var isIOS = /iPad|iPhone|iPod/i.test(ua) || (/Macintosh/i.test(ua) && 'ontouch' in window);
+  var isAndroid = /Android/i.test(ua);
+  var family = isIOS ? 'ios' : (isAndroid ? 'android' : 'desktop');
+  return {
+    family: family,
+    playsInline: true,
+    usesVisualViewport: !!(window.visualViewport && (isIOS || isAndroid)),
+    hideAddressBar: isIOS || isAndroid,
+    supportsWakeLock: 'wakeLock' in navigator,
+    keyboardAdjustment: isIOS ? 'visualViewport' : (isAndroid ? 'viewport' : 'none')
+  };
+}
+
+function applyViewportCompat() {
+  var profile = getCompatProfile();
+  var root = document.documentElement;
+  var viewport = window.visualViewport;
+  if (profile.usesVisualViewport && viewport) {
+    var vh = Math.max(320, viewport.height || window.innerHeight);
+    root.style.setProperty('--app-vh', vh + 'px');
+    root.style.height = vh + 'px';
+    document.body.style.minHeight = vh + 'px';
+    var keyboardOffset = Math.max(0, window.innerHeight - viewport.height);
+    document.body.style.paddingBottom = (keyboardOffset > 0 && profile.family === 'ios') ? (keyboardOffset * 0.6) + 'px' : '';
+  } else {
+    root.style.setProperty('--app-vh', window.innerHeight + 'px');
+    root.style.height = window.innerHeight + 'px';
+    document.body.style.minHeight = window.innerHeight + 'px';
+    document.body.style.paddingBottom = '';
+  }
+  if (profile.family === 'ios') {
+    document.body.classList.add('ios-device');
+  } else {
+    document.body.classList.remove('ios-device');
+  }
+}
+
+function bindViewportCompat() {
+  applyViewportCompat();
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', applyViewportCompat);
+    window.visualViewport.addEventListener('scroll', applyViewportCompat);
+  }
+  window.addEventListener('resize', applyViewportCompat);
+  window.addEventListener('orientationchange', applyViewportCompat);
+}
+
 function wsUrlFromHost(h) {
   h = (h || '').trim() || location.host;
   if (/^(wss?):\/\//i.test(h)) {
@@ -84,6 +147,122 @@ function wsUrlFromHost(h) {
   return 'ws://' + m[1] + ':' + (m[2] || DEFAULT_PORT) + '/ws';
 }
 
+/* ---------- Wake-up UX (relay có thể đang ngủ trên Render v.v.) ---------- */
+var wakeup = (function () {
+  var WAKEUP_THRESHOLD_MS = 3000;  // sau 3s chưa phản hồi → hiện đếm giây
+  var BACKOFF_STEPS = [1, 2, 4, 8, 15];  // giây giữa các lần retry
+  var _timer = null, _countTimer = null, _elapsed = 0, _step = 0;
+  var _active = false, _cancelled = false;
+  var _bar = null;  // DOM element hiển thị wake-up status
+
+  function _getBar() {
+    if (!_bar) {
+      _bar = document.createElement('div');
+      _bar.id = 'wakeup-bar';
+      _bar.style.cssText = [
+        'position:fixed;top:0;left:0;right:0;z-index:9999',
+        'background:linear-gradient(90deg,#f59e0b,#ef4444)',
+        'color:#fff;font-size:14px;font-weight:600',
+        'padding:10px 16px;display:flex;align-items:center;gap:12px',
+        'box-shadow:0 2px 8px rgba(0,0,0,.3)'
+      ].join(';');
+      var txt = document.createElement('span');
+      txt.id = 'wakeup-txt';
+      var btn = document.createElement('button');
+      btn.id = 'wakeup-cancel';
+      btn.textContent = 'Hủy';
+      btn.style.cssText = 'margin-left:auto;background:rgba(255,255,255,.25);border:none;' +
+        'color:#fff;padding:4px 14px;border-radius:6px;cursor:pointer;font-weight:700';
+      btn.onclick = function () { cancel(); };
+      _bar.appendChild(txt); _bar.appendChild(btn);
+    }
+    return _bar;
+  }
+
+  function _setText(s) {
+    var txt = document.getElementById('wakeup-txt');
+    if (txt) txt.textContent = s;
+  }
+
+  function _show() {
+    var bar = _getBar();
+    if (!bar.parentNode) document.body.insertBefore(bar, document.body.firstChild);
+    bar.style.display = 'flex';
+  }
+
+  function _hide() {
+    if (_bar && _bar.parentNode) _bar.style.display = 'none';
+  }
+
+  function _tick() {
+    if (!_active) return;
+    _elapsed++;
+    _setText('⏳ Đang đánh thức máy chủ relay… (' + _elapsed + 's)' +
+      (_step > 0 ? ' — lần thử ' + (_step + 1) : ''));
+    _countTimer = setTimeout(_tick, 1000);
+  }
+
+  /** Gọi khi WS mở → bắt đầu đếm giờ WAKEUP_THRESHOLD_MS */
+  function onOpen(retryFn) {
+    _cancelled = false;
+    _active = true;
+    _timer = setTimeout(function () {
+      if (!_active) return;
+      _elapsed = 0;
+      _show();
+      _tick();
+    }, WAKEUP_THRESHOLD_MS);
+    // Lưu retry function để dùng khi WS đóng mà chưa authed
+    wakeup._retryFn = retryFn;
+  }
+
+  /** Gọi khi đã auth thành công → dừng hết */
+  function onAuthedOk() {
+    _active = false;
+    clearTimeout(_timer); clearTimeout(_countTimer);
+    _step = 0;
+    _hide();
+  }
+
+  /** Gọi khi WS đóng mà chưa authed (relay đang ngủ hoặc lỗi mạng tạm) */
+  function onClosed(isRelay, retryFn) {
+    clearTimeout(_timer); clearTimeout(_countTimer);
+    if (_cancelled || !_active || !isRelay) {
+      _active = false; _hide(); return;
+    }
+    if (_step >= BACKOFF_STEPS.length) {
+      // Hết retry → báo lỗi
+      _active = false; _hide();
+      loginError('Không kết nối được relay sau ' + BACKOFF_STEPS.length + ' lần thử. Kiểm tra URL relay.');
+      return;
+    }
+    var delay = BACKOFF_STEPS[_step];
+    _step++;
+    _setText('⏳ Relay chưa phản hồi — thử lại sau ' + delay + 's…');
+    _show();
+    _countTimer = setTimeout(function () {
+      if (_cancelled) return;
+      _elapsed = 0;
+      if (retryFn) retryFn();
+    }, delay * 1000);
+  }
+
+  function cancel() {
+    _cancelled = true; _active = false;
+    clearTimeout(_timer); clearTimeout(_countTimer);
+    _step = 0; _hide();
+    // Dừng WS nếu còn mở
+    if (st.ws) { try { st.ws.onclose = null; st.ws.close(); } catch (e) {} }
+    el.btnConnect.disabled = false;
+    el.btnConnect.textContent = 'Kết nối';
+    loginError('Đã hủy kết nối relay.');
+  }
+
+  return { onOpen: onOpen, onAuthedOk: onAuthedOk, onClosed: onClosed, cancel: cancel,
+    isActive: function () { return _active; },
+    reset: function () { _step = 0; _cancelled = false; } };
+}());
+
 /* ---------- connect & auth ---------- */
 function connMode() {
   return (typeof st.connMode === 'string' && st.connMode === 'relay') ? 'relay' : 'direct';
@@ -91,6 +270,41 @@ function connMode() {
 function currentHostInput() {
   return connMode() === 'relay' ? el.fRelay.value : el.host.value;
 }
+function buildAuthMessage(id, pass, mode) {
+  var msg = { type: mode === 'relay' ? 'connect' : 'auth', id: id, device_id: id, password: pass };
+  if (st.resumeToken && st.resumeDeviceId === id) {
+    msg.resume_token = st.resumeToken;
+    delete msg.password;
+  }
+  return msg;
+}
+
+function scheduleReconnect() {
+  if (st.closing || !st.host || !st.cred) return;
+  if (st.reconnectTimer) clearTimeout(st.reconnectTimer);
+  var base = Math.min(30000, 1500 * Math.pow(2, Math.max(0, st.reconnectAttempt)));
+  var jitter = Math.round(Math.random() * 1000);
+  st.reconnectDelayMs = base + jitter;
+  st.reconnectAttempt += 1;
+  st.reconnectTimer = setTimeout(function () {
+    if (!st.closing) {
+      toast('Tự động kết nối lại…', 2500);
+      wakeup.reset();
+      connect(st.host, st.cred.id, st.cred.pass);
+    }
+  }, st.reconnectDelayMs);
+}
+
+function acquireWakeLock() {
+  if (!('wakeLock' in navigator) || !st.authed || document.visibilityState !== 'visible') return;
+  try {
+    navigator.wakeLock.request('screen').then(function (lock) {
+      st.wakeLock = lock;
+      lock.addEventListener('release', function () { st.wakeLock = null; });
+    }).catch(function () {});
+  } catch (e) {}
+}
+
 function connect(hostStr, id, pass) {
   var mode = connMode();
   var url = wsUrlFromHost(hostStr);
@@ -115,14 +329,23 @@ function connect(hostStr, id, pass) {
   el.btnConnect.disabled = true;
   el.btnConnect.textContent = 'Đang kết nối…';
 
-  var authTimer = setTimeout(function () {
-    if (!st.authed) { try { ws.close(); } catch (e) {} loginError('Hết thời gian chờ — kiểm tra ID/mật khẩu và cùng mạng Wi-Fi.'); }
-  }, 12000);
+  // Wake-up UX: chỉ kích hoạt trong relay mode
+  var isRelay = (mode === 'relay');
+  var _retryFn = function () { connect(hostStr, id, pass); };
+  if (isRelay) {
+    wakeup.onOpen(_retryFn);
+  }
+
+  // Timeout chỉ dùng cho LAN (relay tự retry qua wakeup)
+  var authTimer = null;
+  if (!isRelay) {
+    authTimer = setTimeout(function () {
+      if (!st.authed) { try { ws.close(); } catch (e) {} loginError('Hết thời gian chờ — kiểm tra ID/mật khẩu và cùng mạng Wi-Fi.'); }
+    }, 12000);
+  }
 
   ws.onopen = function () {
-    var msg = mode === 'relay'
-      ? { type: 'connect', device_id: id, password: pass }
-      : { type: 'auth', id: id, password: pass };
+    var msg = buildAuthMessage(id, pass, mode);
     ws.send(JSON.stringify(msg));
   };
   ws.onmessage = function (ev) {
@@ -130,17 +353,31 @@ function connect(hostStr, id, pass) {
     var m;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.type === 'auth_ok' || (m.type === 'auth_result' && m.ok)) {
+      clearTimeout(authTimer);
+      if (isRelay) wakeup.onAuthedOk();
       var d = m.type === 'auth_ok' ? m : (m.data || {});
+      // Gửi hello ngược ngay sau khi xác thực thành công
+      ws.send(JSON.stringify({ type: 'hello', v: PROTOCOL_VERSION, caps: PROTOCOL_CAPS }));
       onAuthed(d);
+    } else if (m.type === 'hello') {
+      // Nhận hello từ agent — ghi nhận phiên bản để dùng sau
+      st.peerV = (typeof m.v === 'number' && m.v >= 1) ? m.v : 1;
+      st.peerCaps = Array.isArray(m.caps) ? m.caps : [];
     } else if (m.type === 'auth_fail' || (m.type === 'auth_result' && !m.ok)) {
       clearTimeout(authTimer);
+      if (isRelay) wakeup.onAuthedOk();  // dừng retry (lỗi auth ≠ relay ngủ)
+      st.resumeToken = '';
+      localStorage.removeItem('tl_resumeToken');
+      localStorage.removeItem('tl_resumeDeviceId');
       el.btnConnect.disabled = false;
       el.btnConnect.textContent = 'Kết nối';
       show(el.viewer, false); show(el.login, true);
       loginError((m.message || 'Sai thông tin đăng nhập'));
     } else if (m.type === 'screen_locked') {
-      if (m.locked) {
-        toast('🔒 Máy tính đang KHÓA màn hình — Windows không cho xem/điều khiển từ xa ở trạng thái này. Cần mở khóa trực tiếp tại máy.', 7000);
+      if (m.locked && m.svc) {
+        toast('🔒 Màn hình máy tính đang khóa — đang điều khiển QUA SERVICE: gõ mật khẩu Windows rồi Enter để mở khóa.', 8000);
+      } else if (m.locked) {
+        toast('🔒 Máy tính đang KHÓA màn hình — chưa cài service nên không xem/điều khiển được. Cài "TouchLinkSvc" trong app máy tính (Cài đặt → Service).', 8000);
       } else {
         toast('Máy tính đã mở khóa màn hình', 3000);
       }
@@ -158,19 +395,29 @@ function connect(hostStr, id, pass) {
   };
   ws.onclose = function () {
     clearTimeout(authTimer);
+    if (!st.authed) {
+      // Chưa auth → relay có thể đang ngủ → retry backoff
+      if (isRelay && !wakeup.isActive && !st.closing) {
+        el.btnConnect.textContent = 'Đang chờ relay…';
+        wakeup.onClosed(true, _retryFn);
+        return;
+      } else if (isRelay && !st.closing) {
+        wakeup.onClosed(true, _retryFn);
+        return;
+      }
+    }
     el.btnConnect.disabled = false;
     el.btnConnect.textContent = 'Kết nối';
     if (st.authed && !st.closing) {
       show(el.viewer, true); show(el.login, false);
       el.lostMsg.textContent = 'Mất kết nối với máy tính.';
       show(el.lost, true);
-      if (!st._retried) {  // mạng yếu: tự thử lại MỘT lần sau 4 giây
+      if (!st._retried) {
         st._retried = true;
         clearTimeout(st._retry_t);
         st._retry_t = setTimeout(function () {
           if (!st.closing) {
-            toast('Tự động kết nối lại…', 2500);
-            connect(st.host, st.cred.id, st.cred.pass);
+            scheduleReconnect();
           }
         }, 4000);
       }
@@ -182,10 +429,18 @@ function connect(hostStr, id, pass) {
 function loginError(msg) {
   el.loginError.hidden = !msg;
   el.loginError.textContent = msg || '';
+
 }
 
 function onAuthed(d) {
   st.authed = true;
+  st.reconnectAttempt = 0;
+  if (d && d.resume_token) {
+    st.resumeToken = d.resume_token;
+    st.resumeDeviceId = st.cred && st.cred.id ? st.cred.id : '';
+    localStorage.setItem('tl_resumeToken', st.resumeToken);
+    localStorage.setItem('tl_resumeDeviceId', st.resumeDeviceId);
+  }
   show(el.login, false); show(el.viewer, true); show(el.lost, false);
   el.btnConnect.disabled = false; el.btnConnect.textContent = 'Kết nối';
   if (el.fremember.checked) {
@@ -200,7 +455,11 @@ function onAuthed(d) {
   if (d.safe_test) toast('⚠ SAFE-TEST: thao tác không được thực thi thật', 4000);
   if (d.screen_locked) {
     setTimeout(function () {
-      toast('🔒 Máy tính đang KHÓA màn hình — không thể xem/điều khiển cho đến khi mở khóa trực tiếp.', 7000);
+      if (d.svc_ok) {
+        toast('🔒 Máy đang khóa — đang điều khiển QUA SERVICE: gõ mật khẩu Windows rồi Enter.', 8000);
+      } else {
+        toast('🔒 Máy đang khóa và chưa cài service — không xem/điều khiển được. Cài "TouchLinkSvc" trong app (Cài đặt).', 8000);
+      }
     }, 800);
   }
   st._retried = false;
@@ -208,6 +467,7 @@ function onAuthed(d) {
   show(el.scrollstrip, true);
   frameCount = 0; fpsShown = 0; pingMs = 0;
   toast('Đã kết nối tới ' + (d.hostname || 'máy tính'));
+  acquireWakeLock();
   if ('requestFullscreen' in document.documentElement) { /* không tự mở */ }
 }
 
@@ -246,23 +506,146 @@ function updateMeta() {
 }
 
 /* ---------- frames & canvas ---------- */
-function onFrame(buf) {
+
+/**
+ * Tạo/reset offscreen canvas để giữ full frame khi dùng tile mode.
+ * Gọi khi fw/fh thay đổi.
+ */
+function ensureTileCanvas(fw, fh) {
+  if (!st.tileCanvas) {
+    st.tileCanvas = document.createElement('canvas');
+    st.tileCtx = st.tileCanvas.getContext('2d');
+  }
+  if (st.tileCanvas.width !== fw || st.tileCanvas.height !== fh) {
+    st.tileCanvas.width = fw;
+    st.tileCanvas.height = fh;
+    // Điền màu đen khi thay đổi kích thước
+    st.tileCtx.fillStyle = '#000';
+    st.tileCtx.fillRect(0, 0, fw, fh);
+  }
+}
+
+/**
+ * Xử lý frame 0x01 (toàn khung JPEG cũ).
+ */
+function onFrameFull(buf) {
   try {
     var dv = new DataView(buf);
-    if (dv.getUint8(0) !== 1) return;
-    st.fw = dv.getUint16(1); st.fh = dv.getUint16(3);
+    if (dv.getUint8(0) !== 0x01) return;
+    var fw = dv.getUint16(1);
+    var fh = dv.getUint16(3);
+    st.fw = fw; st.fh = fh;
     var blob = new Blob([buf.slice(5)], { type: 'image/jpeg' });
     if (window.createImageBitmap) {
       createImageBitmap(blob).then(function (b) {
         if (bmp && bmp.close) bmp.close();
-        bmp = b; redrawNeeded = true;
+        bmp = b;
+        // Cập nhật offscreen tile canvas
+        ensureTileCanvas(fw, fh);
+        st.tileCtx.drawImage(b, 0, 0);
+        redrawNeeded = true;
       }).catch(function () {});
     } else {
       var img = new Image();
-      img.onload = function () { bmp = img; redrawNeeded = true; };
+      img.onload = function () {
+        bmp = img;
+        ensureTileCanvas(fw, fh);
+        st.tileCtx.drawImage(img, 0, 0);
+        redrawNeeded = true;
+      };
       img.src = URL.createObjectURL(blob);
     }
     frameCount++;
+  } catch (e) {}
+}
+
+/**
+ * Xử lý frame 0x02 (tile dirty-rect).
+ * Wire format: [0x02][fw:u16][fh:u16][tile_size:u16][n_tiles:u16]
+ *              per tile: [tx:u16][ty:u16][jpeg_len:u32][jpeg...]
+ */
+function onFrameTile(buf) {
+  try {
+    var dv = new DataView(buf);
+    if (dv.getUint8(0) !== 0x02) return;
+    var fw = dv.getUint16(1);
+    var fh = dv.getUint16(3);
+    // var tileSize = dv.getUint16(5);  // không cần ở client
+    var nTiles = dv.getUint16(7);
+    if (nTiles === 0) { frameCount++; return; }
+    st.fw = fw; st.fh = fh;
+    ensureTileCanvas(fw, fh);
+
+    var offset = 9;  // sau header 9 byte
+    var pending = nTiles;
+    var newBmp = null;
+
+    function finalize() {
+      // Sau khi tất cả tile đã vẽ lên tileCanvas → tạo ImageBitmap từ canvas
+      if (window.createImageBitmap) {
+        createImageBitmap(st.tileCanvas).then(function (b) {
+          if (bmp && bmp.close) bmp.close();
+          bmp = b;
+          redrawNeeded = true;
+        }).catch(function () {});
+      } else {
+        // Fallback: vẽ trực tiếp (không cần bmp)
+        redrawNeeded = true;
+        bmp = st.tileCanvas;  // draw() sẽ drawImage canvas
+      }
+      frameCount++;
+    }
+
+    for (var i = 0; i < nTiles; i++) {
+      if (offset + 8 > buf.byteLength) break;
+      var tx = dv.getUint16(offset);
+      var ty = dv.getUint16(offset + 2);
+      var jlen = dv.getUint32(offset + 4);
+      offset += 8;
+      if (offset + jlen > buf.byteLength) break;
+      var jpegSlice = buf.slice(offset, offset + jlen);
+      offset += jlen;
+      /* jshint loopfunc: true */
+      (function (jtx, jty, jbuf) {
+        var blob2 = new Blob([jbuf], { type: 'image/jpeg' });
+        if (window.createImageBitmap) {
+          createImageBitmap(blob2).then(function (tb) {
+            st.tileCtx.drawImage(tb, jtx, jty);
+            if (tb.close) tb.close();
+            pending--;
+            if (pending <= 0) finalize();
+          }).catch(function () {
+            pending--;
+            if (pending <= 0) finalize();
+          });
+        } else {
+          var timg = new Image();
+          timg.onload = function () {
+            st.tileCtx.drawImage(timg, jtx, jty);
+            pending--;
+            if (pending <= 0) finalize();
+          };
+          timg.onerror = function () {
+            pending--;
+            if (pending <= 0) finalize();
+          };
+          timg.src = URL.createObjectURL(blob2);
+        }
+      }(tx, ty, jpegSlice));
+    }
+  } catch (e) {}
+}
+
+function onFrame(buf) {
+  try {
+    var dv = new DataView(buf);
+    var type = dv.getUint8(0);
+    if (type === 0x01) {
+      onFrameFull(buf);
+    } else if (type === 0x02) {
+      onFrameTile(buf);
+    }
+    // type không nhận ra → bỏ qua
   } catch (e) {}
 }
 
@@ -771,6 +1154,14 @@ setInterval(function () {
   if (st.authed) send({ type: 'ping', t: Date.now() });
 }, 2000);
 
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'visible') {
+    acquireWakeLock();
+  } else if (st.wakeLock && st.wakeLock.release) {
+    st.wakeLock.release().catch(function () {});
+  }
+});
+
 /* ---------- login UI ---------- */
 function setConnMode(mode, save) {
   st.connMode = (mode === 'relay') ? 'relay' : 'direct';
@@ -828,5 +1219,6 @@ function initLogin() {
     });
   });
 }
+bindViewportCompat();
 initLogin();
 })();

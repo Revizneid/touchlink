@@ -18,6 +18,7 @@ from aiohttp import web
 import config as cfgmod
 import capture
 import core
+import overlay as overlay_mod
 import secure
 import util
 from auth import RateLimiter
@@ -151,14 +152,20 @@ def run_headless(cfg, events_q):
     print("Mật khẩu : %s" % util.password_plain(cfg))
     for u in util.build_urls(cfg):
         print("Địa chỉ  : %s" % u)
-    print("=" * 56, flush=True)
+    print("=" * 56)
+    print("[Headless] ⚠ Overlay không hiện khi chạy --headless.")
+    print("[Headless] Hotkey Ctrl+Alt+Shift+F12 vẫn hoạt động (ngắt viewer khẩn cấp).", flush=True)
     try:
         while True:
             kind, data = events_q.get()
             if kind == "log":
                 print("  ·", data, flush=True)
             elif kind == "clients":
-                print("  · viewers: %s" % data, flush=True)
+                n = int(data)
+                if n > 0:
+                    print("  ⚠ CảNH BÁO: đang có %d viewer điều khiển máy tính này!" % n, flush=True)
+                else:
+                    print("  · viewers: 0", flush=True)
             elif kind == "chat":
                 print("  [chat] %s: %s" % data, flush=True)
     except KeyboardInterrupt:
@@ -207,8 +214,31 @@ def main():
     started_evt.wait(timeout=10)
 
     if args.headless:
+        cfg["_headless"] = True
+        # Hotkey khẩn cấp ngay cả trong headless (overlay_mod không cần Tk root)
+        try:
+            import overlay as overlay_mod
+
+            def _headless_disconnect():
+                loop = core.get_loop()
+                if loop and loop.is_running():
+                    import asyncio
+                    asyncio.run_coroutine_threadsafe(
+                        _disconnect_all(loop), loop)
+
+            async def _disconnect_all(loop):
+                for c in list(core.clients):
+                    try:
+                        await core.remove_client(c, "(ngắt khẩn headless)")
+                    except Exception:
+                        pass
+
+            overlay_mod._register_hotkey(_headless_disconnect)
+        except Exception as e:
+            print("[Headless] overlay hotkey lỗi: %s" % e, flush=True)
         run_headless(cfg, events_q)
     else:
+        cfg["_headless"] = False
         try:
             run_gui(cfg, events_q)
         except Exception as e:

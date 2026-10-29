@@ -1,4 +1,5 @@
 """TouchLink v2.0 — giao diện desktop (tkinter, dark navy/blue control center)."""
+import ctypes
 import os
 import queue
 import threading
@@ -12,6 +13,7 @@ from PIL import ImageTk
 import config as cfgmod
 import capture
 import core
+import overlay as overlay_mod
 import relay_client
 import secure
 from util import build_urls, lan_ips, password_plain
@@ -67,9 +69,12 @@ class TouchLinkGUI(tk.Tk):
         self._style()
         self._build_header()
         self._build_body()
+        self._overlay = overlay_mod.init(self, headless=False)
+        self._overlay.set_disconnect_callback(self._disconnect_all_viewers)
         self._toast_after = None
         self.after(250, self._poll)
         self.show_page("dash")
+        self._refresh_svc_status()
         core.log("TouchLink v%s sẵn sàng." % cfgmod.VERSION)
 
     # ---------- styling ----------
@@ -483,6 +488,24 @@ class TouchLinkGUI(tk.Tk):
         except Exception as e:
             self.toast("Cài đặt lỗi: %s" % e, "err")
 
+    def _disconnect_all_viewers(self):
+        """Ngắt toàn bộ viewer — gọi từ overlay hoặc hotkey."""
+        loop = core.get_loop()
+        if loop and loop.is_running():
+            import asyncio
+
+            async def _do():
+                for c in list(core.clients):
+                    try:
+                        await core.remove_client(c, "(ngắt khẩn)")
+                    except Exception:
+                        pass
+
+            asyncio.run_coroutine_threadsafe(_do(), loop)
+            self.toast("Đã ngắt toàn bộ viewer", "ok")
+        else:
+            self.toast("Lỗi: event loop chưa sẵn sàng", "err")
+
     def _apply_relay(self):
         self.cfg["relay_url"] = self.var_relay.get().strip()
         self.cfg["relay_enabled"] = bool(self.var_relay_on.get())
@@ -693,6 +716,123 @@ class TouchLinkGUI(tk.Tk):
                  font=(F, 8), fg=C["dim"], bg=C["card"], justify="left",
                  wraplength=720).pack(anchor="w", pady=(6, 0))
 
+        tk.Frame(box, bg=C["line"], height=1).pack(fill="x", pady=(14, 10))
+        tk.Label(box, text="🔔  Xác nhận kết nối mới", font=(F, 10, "bold"), fg=C["text"],
+                 bg=C["card"]).pack(anchor="w")
+        tk.Label(box, text="Hiện hộp thoại Cho phép / Chỉ xem / Từ chối khi có viewer kết nối mới.\n"
+                 "Timeout 30 giây → tự động từ chối.",
+                 font=(F, 9), fg=C["dim"], bg=C["card"], justify="left",
+                 wraplength=740).pack(anchor="w", pady=(4, 6))
+        row_consent = tk.Frame(box, bg=C["card"])
+        row_consent.pack(fill="x")
+        self.var_consent_relay = tk.BooleanVar(
+            value=bool(self.cfg.get("consent_relay", True)))
+        self.var_consent_lan = tk.BooleanVar(
+            value=bool(self.cfg.get("consent_lan", False)))
+        ttk.Checkbutton(row_consent,
+                        text="Yêu cầu xác nhận cho kết nối qua relay (mặc định BẬT)",
+                        variable=self.var_consent_relay).pack(anchor="w")
+        ttk.Checkbutton(row_consent,
+                        text="Yêu cầu xác nhận cho kết nối LAN (mặc định tắt)",
+                        variable=self.var_consent_lan).pack(anchor="w", pady=(4, 0))
+        tk.Label(row_consent,
+                 text="⚠ Hotkey khẩn cấp Ctrl+Alt+Shift+F12 — ngắt toàn bộ viewer ngay lập tức.",
+                 font=(F, 9, "bold"), fg=C["warn"], bg=C["card"]).pack(anchor="w", pady=(6, 0))
+        self.btn(row_consent, "Lưu xác nhận",
+                 self._save_consent, primary=True).pack(anchor="w", pady=(8, 0))
+
+        tk.Frame(box, bg=C["line"], height=1).pack(fill="x", pady=(14, 10))
+        tk.Label(box, text="🛠  Service mở khóa từ xa (TouchLinkSvc)", font=(F, 10, "bold"),
+                 fg=C["text"], bg=C["card"]).pack(anchor="w")
+        self.lbl_svc = tk.Label(box, text="Service: đang kiểm tra…", font=(F, 9),
+                                fg=C["dim"], bg=C["card"])
+        self.lbl_svc.pack(anchor="w", pady=(4, 2))
+        row = tk.Frame(box, bg=C["card"])
+        row.pack(anchor="w")
+        self.btn(row, "Cài service (cần Admin)", self._install_svc,
+                 primary=True).pack(side="left")
+        self.btn(row, "Gỡ service", self._remove_svc).pack(side="left", padx=8)
+        tk.Label(box, text="Service chạy ngầm (SYSTEM) cho phép xem màn hình đăng nhập "
+                 "và gõ mật khẩu Windows từ xa khi máy bị khóa — cùng cơ chế "
+                 "UltraViewer/TeamViewer. Cài 1 lần duy nhất.",
+                 font=(F, 8), fg=C["dim"], bg=C["card"], justify="left",
+                 wraplength=720).pack(anchor="w", pady=(4, 0))
+
+    def _probe_svc(self):
+        def _run():
+            try:
+                import svcpipe
+                info = svcpipe.ping()
+            except Exception:
+                info = None
+            if self.events_q is not None:
+                self.events_q.put(("svc", info))
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _refresh_svc_status(self):
+        def _run():
+            try:
+                import svcpipe
+                info = svcpipe.ping()
+            except Exception:
+                info = None
+            self.after(0, lambda: self._show_svc(info))
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _show_svc(self, info):
+        if info and info.get("ok"):
+            self.lbl_svc.configure(
+                text="Service: đang chạy — máy khóa: %s%s" % (
+                    "có" if info.get("locked") else "không",
+                    "  (safe-test)" if info.get("safe") else ""),
+                fg=C["ok"])
+        else:
+            self.lbl_svc.configure(
+                text="Service: chưa cài / không chạy — chỉ điều khiển được khi "
+                     "màn hình mở", fg=C["warn"])
+
+    def _svc_exe_hint(self):
+        cand = os.path.join(cfgmod.BASE_DIR, "TouchLinkSvc.exe")
+        if os.path.exists(cand):
+            return cand
+        cand2 = os.path.join(cfgmod.ROOT_DIR, "dist", "TouchLinkSvc.exe")
+        if os.path.exists(cand2):
+            return cand2
+        return None
+
+    def _install_svc(self):
+        exe = self._svc_exe_hint()
+        if exe:
+            cmd = '"%s" install && net start TouchLinkSvc' % exe
+        else:
+            py = os.path.join(cfgmod.ROOT_DIR, ".venv", "Scripts", "python.exe")
+            script = os.path.join(cfgmod.APP_DIR, "svc_main.py")
+            if not os.path.exists(py):
+                self.toast("Không tìm thấy TouchLinkSvc.exe — hãy build trước", "err")
+                return
+            cmd = '"%s" "%s" install && net start TouchLinkSvc' % (py, script)
+        try:
+            ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe",
+                                                "/c " + cmd, None, 1)
+            self.toast("Đang cài service — bấm Yes trong cửa sổ UAC", "warn")
+            self.after(8000, self._refresh_svc_status)
+        except Exception as e:
+            self.toast("Không mở được UAC: %s" % e, "err")
+
+    def _remove_svc(self):
+        exe = self._svc_exe_hint()
+        svc_ref = '"%s"' % exe if exe else '"%s" "%s"' % (
+            os.path.join(cfgmod.ROOT_DIR, ".venv", "Scripts", "python.exe"),
+            os.path.join(cfgmod.APP_DIR, "svc_main.py"))
+        try:
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", "cmd.exe",
+                "/c net stop TouchLinkSvc & %s remove" % svc_ref, None, 1)
+            self.toast("Đang gỡ service…", "warn")
+            self.after(8000, self._refresh_svc_status)
+        except Exception as e:
+            self.toast("Không mở được UAC: %s" % e, "err")
+
     def _open_link(self, url):
         try:
             import webbrowser
@@ -712,6 +852,13 @@ class TouchLinkGUI(tk.Tk):
         cfgmod.save(self.cfg)
         core.broadcast_event("history", ("setting", "Lưu cổng server: %d" % port))
         self.toast("Đã lưu cổng %d — khởi động lại app để áp dụng" % port, "ok")
+
+    def _save_consent(self):
+        self.cfg["consent_relay"] = bool(self.var_consent_relay.get())
+        self.cfg["consent_lan"] = bool(self.var_consent_lan.get())
+        import config as cfgmod
+        cfgmod.save(self.cfg)
+        self.toast("Đã lưu cài đặt xác nhận", "ok")
 
     def _open_cfgdir(self):
         try:
@@ -767,6 +914,9 @@ class TouchLinkGUI(tk.Tk):
         return "info"
 
     def _poll(self):
+        self._tick = getattr(self, "_tick", 0) + 1
+        if self._tick % 60 == 0:
+            self._probe_svc()
         try:
             for _ in range(300):
                 kind, data = self.events_q.get_nowait()
@@ -784,6 +934,12 @@ class TouchLinkGUI(tk.Tk):
                 elif kind == "clients":
                     self.viewer_count = int(data)
                     self._update_status_badges()
+                    # Cập nhật overlay — lấy tên viewer hiện tại
+                    try:
+                        names = [n for n, _ in core.clients_snapshot()]
+                        self._overlay.update_viewers(names)
+                    except Exception:
+                        pass
                 elif kind == "relay":
                     self.relay_status = str(data)
                     self._update_status_badges()
@@ -794,6 +950,8 @@ class TouchLinkGUI(tk.Tk):
                     self.toast("💬 %s: %s" % data)
                 elif kind == "history":
                     self._hist_add_row(data)
+                elif kind == "svc":
+                    self._show_svc(data)
                 elif kind == "settings":
                     pass
         except queue.Empty:

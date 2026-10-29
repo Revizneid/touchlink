@@ -1,0 +1,56 @@
+# fly.toml — Fly.io deployment cho TouchLink Relay
+# Tài liệu: https://fly.io/docs/reference/configuration/
+# Triển khai: fly deploy --config deploy/fly.toml
+
+app = "touchlink-relay"          # thay bằng tên app Fly.io của bạn
+primary_region = "sin"           # Singapore (gần VN nhất); xem: fly platform regions
+
+[build]
+  dockerfile = "deploy/Dockerfile"
+  # Build context là thư mục gốc repo (chứa relay/relay_server.py)
+  # Khi dùng Dockerfile này, copy thủ công relay_server.py vào deploy/ trước khi build,
+  # hoặc dùng build.args để trỏ tới relay/
+
+[env]
+  PORT = "8430"
+  RELAY_TRUSTED_PROXY = "1"      # Fly.io đặt IP thật vào X-Forwarded-For
+  RELAY_ANONYMIZE_LOGS = "0"
+  RELAY_MAX_CONNS_IP = "20"
+  RELAY_MAX_CONN_ID = "10"
+  RELAY_MAX_AUTH_FAIL = "5"
+  RELAY_AUTH_BAN_S = "180"
+
+# Secrets (không đặt trong fly.toml — dùng: fly secrets set RELAY_METRICS_TOKEN=xxx)
+# RELAY_METRICS_TOKEN
+
+[[services]]
+  internal_port = 8430
+  protocol = "tcp"
+  auto_stop_machines = false     # QUAN TRỌNG: tắt auto-stop để relay không ngủ
+  auto_start_machines = true
+  min_machines_running = 1       # luôn có ít nhất 1 máy chạy
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true           # redirect HTTP → HTTPS
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/healthz"
+    protocol = "http"
+
+[metrics]
+  port = 8430
+  path = "/metrics"
+
+# Scale: 1 shared-cpu-1x (256MB) đủ cho relay không trạng thái
+# Giá: ~$1.94/tháng cho 1 máy shared-cpu-1x (https://fly.io/docs/about/pricing/)
+# Free tier: 3 shared-cpu machines + 160GB transfer/tháng miễn phí

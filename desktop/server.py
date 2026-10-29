@@ -8,6 +8,7 @@ from aiohttp import WSMsgType, web
 
 import core
 from auth import RateLimiter
+from protocol import PROTOCOL_VERSION, CAPS, HELLO_TIMEOUT, MAX_MSG_SIZE
 
 # Khi chạy exe (PyInstaller onefile): thư mục web/ được bundle trong sys._MEIPASS
 if getattr(sys, "frozen", False):
@@ -49,7 +50,10 @@ def make_app(cfg):
         })
 
     @routes.get("/api/debug")
-    async def api_debug(_request):
+    async def api_debug(request):
+        # chỉ dành cho kiểm thử: giả lập khóa/mở khóa màn hình
+        if core.inp.SAFE_TEST and request.query.get("action") == "setlock":
+            core._push_lock(request.query.get("v", "1") == "1")
         return web.json_response({
             "clients": len(core.clients),
             "events": core.counters["events"],
@@ -61,7 +65,7 @@ def make_app(cfg):
 
     @routes.get("/ws")
     async def ws_handler(request):
-        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=2 * 1024 * 1024)
+        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=MAX_MSG_SIZE)
         await ws.prepare(request)
         peer = request.remote or "?"
         conn = core.ClientConn(
@@ -101,6 +105,30 @@ def make_app(cfg):
             return ws
         limiter.reset(peer)
         await conn.send_json(core.auth_ok_payload())
+        # --- hello handshake v2 ---
+        await conn.send_json({
+            "type": "hello",
+            "v": PROTOCOL_VERSION,
+            "caps": CAPS,
+        })
+        # Chờ hello ngược từ viewer; timeout → coi như v1 (bỏ qua, vẫn hoạt động)
+        conn.peer_v = 1
+        conn.peer_caps: list[str] = []
+        try:
+            hello_raw = await asyncio.wait_for(ws.receive(), timeout=HELLO_TIMEOUT)
+            if hello_raw.type == WSMsgType.TEXT:
+                hello_data = json.loads(hello_raw.data)
+                if hello_data.get("type") == "hello":
+                    conn.peer_v = int(hello_data.get("v") or 1)
+                    conn.peer_caps = list(hello_data.get("caps") or [])
+                    core.log(
+                        "Viewer hello: v=%d caps=%s" % (conn.peer_v, conn.peer_caps)
+                    )
+                else:
+                    # message không phải hello: đưa vào xử lý bình thường
+                    await core.handle_client_message(conn, hello_data)
+        except (asyncio.TimeoutError, Exception):
+            pass  # v1 viewer không gửi hello — hoạt động bình thường
         await core.add_client(conn)
         try:
             async for msg in ws:

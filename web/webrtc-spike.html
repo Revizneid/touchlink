@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>TouchLink WebRTC Spike</title>
+    <style>
+      body { font-family: sans-serif; margin: 32px; background: #0d1117; color: #e6edf3; }
+      .card { max-width: 900px; margin: 0 auto; background: #161b22; border-radius: 12px; padding: 24px; }
+      textarea { width: 100%; min-height: 140px; }
+      button { margin-top: 8px; padding: 10px 16px; border: none; border-radius: 8px; cursor: pointer; }
+      video { width: 100%; max-height: 420px; background: black; border-radius: 12px; margin-top: 16px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>TouchLink WebRTC Spike</h1>
+      <p>Manual signaling placeholder for Sprint 3.1. This page is a local test harness for copy/pasting SDP offer/answer.</p>
+      <button id="connect">Connect (placeholder)</button>
+      <video id="video" autoplay playsinline muted></video>
+      <h3>Remote SDP</h3>
+      <textarea id="sdp" placeholder="Paste remote SDP here"></textarea>
+    </div>
+    <script>
+      const connectBtn = document.getElementById('connect');
+      const sdpBox = document.getElementById('sdp');
+      connectBtn.addEventListener('click', () => {
+        const note = sdpBox.value ? 'SDP ready for signaling.' : 'No SDP available yet. Paste a remote offer/answer.';
+        alert(note);
+      });
+    </script>
+  </body>
+</html>

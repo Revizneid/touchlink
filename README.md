@@ -1,4 +1,4 @@
-# TouchLink v2.1 — Điều khiển máy tính từ điện thoại (kiểu UltraViewer)
+# TouchLink v3.0.0 — Điều khiển máy tính từ điện thoại (kiểu UltraViewer)
 
 > **Tác giả / Credit:** [Revizneid](https://github.com/Revizneid) — mã nguồn mở MIT.
 > Xây dựng trên các thư viện mở: Python, aiohttp, mss, Pillow, pyautogui, qrcode, pyperclip.
@@ -47,13 +47,33 @@ Hai chế độ kết nối:
 - Cuộn dọc/ngang (2 ngón hoặc dải cuộn bên phải), thu phóng/kéo khung nhìn bằng pinch
 - Đồng bộ clipboard 2 chiều, chat với người ngồi máy tính
 - **Ngăn máy tính tự sleep** (SetThreadExecutionState, bật/tắt được từ GUI và web)
+- **Mở khóa từ xa** (cơ chế UltraViewer/TeamViewer): cài `TouchLinkSvc` (service SYSTEM,
+  1 lần duy nhất) — khi màn hình Windows khóa, app tự chuyển sang đường service:
+  xem màn hình đăng nhập và gõ mật khẩu Windows để mở khóa
 - Stream thích ứng: mỗi viewer có mailbox "frame mới nhất" — mạng yếu bỏ frame cũ,
   không chặn người xem khác hay vòng chụp màn hình
-- Cảnh báo khi màn hình Windows bị khóa (không thể xem/điều khiển từ phiên người
-  dùng do cơ chế bảo mật Windows — phải mở khóa trực tiếp)
 - Bảo mật: mật khẩu (lưu mã hóa DPAPI), khóa IP thử sai 5 lần/5 phút, xác thực trên máy tính
   (relay không thấy mật khẩu dưới dạng kiểm chứng được)
 - PWA: cài lên màn hình chính Android, chạy fullscreen; đăng nhập bằng phím Enter
+- **Overlay đang-bị-điều-khiển** (Sprint 0.3): thanh nhỏ luôn nổi góc trên màn hình
+  hiện tên viewer (IP che bớt) + nút "Ngắt kết nối" khi có ≥1 viewer đã xác thực;
+  phím nóng khẩn cấp **Ctrl+Alt+Shift+F12** ngắt tất cả viewer ngay lập tức;
+  headless: in cảnh báo console, không có cửa sổ
+- **Xác nhận kết nối mới** (Sprint 0.3): hộp thoại Cho phép / Chỉ xem / Từ chối,
+  timeout 30 giây → tự từ chối; mặc định BẬT cho relay, TẮT cho LAN
+  (cấu hình trong Cài đặt → Xác nhận kết nối)
+- **Relay không ngủ** (Sprint 0.3): hướng dẫn deploy lên Fly.io / VPS / Oracle Free;
+  PWA tự đánh thức relay (đếm giây + retry backoff 1→2→4→8→15s) khi relay đang ngủ (Render free)
+- **Relay client tự kết nối lại** (Sprint 0.3): backoff + jitter tự động, trạng thái
+  realtime (Đang kết nối / Đã kết nối / Thử lại / Lỗi) hiển thị trên dashboard
+
+**Mở khóa từ xa hoạt động thế nào:** UltraViewer/TeamViewer đều dùng một Windows
+service chạy quyền SYSTEM. TouchLink tương tự: `TouchLinkSvc` gắn vào window
+station WinSta0 + desktop nhập liệu hiện hành (khi khóa là Winlogon) để chụp màn
+hình đăng nhập và gửi chuột/bàn phím vào đó. App chính phát hiện khóa (mỗi 2 giây)
+và tự chuyển đường capture/input qua service qua named pipe nội bộ; mở máy thì
+tự quay về đường trực tiếp (nhanh hơn). Cài: trong app → **Cài đặt → Cài service
+(cần Admin)** hoặc chạy `install_service.bat`; gỡ: `uninstall_service.bat`.
 
 ## Cài đặt & chạy (máy tính Windows)
 
@@ -103,6 +123,49 @@ Mở cổng 8430/TCP. Trên app máy tính: nhập `Relay URL` = `ws://<IP-VPS>:
 (Caddy: `touchlink.example.com { reverse_proxy 127.0.0.1:8430 }`) rồi dùng URL
 `https://…` (WebSocket tự chuyển wss). Mật khẩu được chuyển về máy tính để xác minh,
 relay chỉ ghép cặp theo ID.
+
+## Cấu hình relay công khai
+
+Relay hỗ trợ cấu hình qua **tham số CLI** hoặc **biến môi trường** (CLI ưu tiên):
+
+```bash
+python3 relay/relay_server.py \
+  --port 8430 \
+  --trusted-proxy \
+  --anonymize-logs \
+  --metrics-token "your-secret-token" \
+  --max-conns-ip 20 \
+  --max-conn-id 10 \
+  --max-conn-total 30 \
+  --max-auth-fail 5 \
+  --auth-ban-s 180 \
+  --max-conns-total-ip 10
+```
+
+| Tham số CLI | Biến môi trường | Mặc định | Ý nghĩa |
+|---|---|---|---|
+| `--trusted-proxy` | `RELAY_TRUSTED_PROXY=1` | tắt | Tin tưởng `X-Forwarded-For` (chỉ bật sau nginx/Caddy) |
+| `--anonymize-logs` | `RELAY_ANONYMIZE_LOGS=1` | tắt | Ẩn octet cuối IP trong log |
+| `--metrics-token TOKEN` | `RELAY_METRICS_TOKEN` | trống | Token bảo vệ `/metrics` |
+| `--max-conns-ip N` | `RELAY_MAX_CONNS_IP` | 20 | Kết nối WS mới tối đa/phút/IP |
+| `--max-conn-id N` | `RELAY_MAX_CONN_ID` | 10 | Lần `connect` tới một ID/phút/IP |
+| `--max-conn-total N` | `RELAY_MAX_CONN_TOTAL` | 30 | Lần `connect` tới một ID/phút/ID |
+| `--max-auth-fail N` | `RELAY_MAX_AUTH_FAIL` | 5 | Auth fail tối đa trước khi khoá |
+| `--auth-ban-s N` | `RELAY_AUTH_BAN_S` | 180 | Giây khoá sau khi vượt ngưỡng |
+| `--max-conns-total-ip N` | `RELAY_MAX_CONNS_TOTAL` | 10 | Kết nối đồng thời tối đa/IP |
+| `PORT` (env) | `PORT` | 8430 | Cổng lắng nghe (Render/Heroku) |
+
+**Endpoint giám sát:**
+
+| Endpoint | Mô tả |
+|---|---|
+| `GET /healthz` | Kiểm tra relay sống (không lộ ID) |
+| `GET /metrics` | Số kết nối, từ chối, auth fail (bảo vệ bằng Bearer token nếu có) |
+| `GET /api/relayinfo` | Số agent online/bận (không lộ device_id cụ thể) |
+
+**Bảo mật relay (Sprint 0.2):** sliding-window rate-limit theo IP và ID, chống dò ID
+(tất cả lỗi connect trả cùng message + jitter delay 50–150ms), log JSON Lines
+(không log mật khẩu, phím, nội dung frame).
 
 ## Dòng lệnh (desktop)
 
@@ -156,19 +219,86 @@ Cấu hình lưu tại `desktop/config.json` (mật khẩu mã hóa DPAPI theo u
 
 ## Giới hạn đã biết
 
-- **Ctrl+Alt+Del / UAC / màn hình khóa**: Windows chặn gửi từ tiến trình người dùng; không xem
-  được màn hình khóa/UAC (đặc điểm chung của các app remote cùng cấp quyền).
+- **Không cài `TouchLinkSvc`**: không xem được màn hình khóa (Windows Logon), không gõ
+  mật khẩu đăng nhập từ xa được (giống mọi app remote cùng cấp quyền người dùng).
+- **Có cài `TouchLinkSvc`**: có thể xem và gửi các phím (kể cả mật khẩu Windows) vào màn
+  hình đăng nhập Winlogon. **Không hỗ trợ UAC Secure Desktop** (hộp thoại UAC chạy trên
+  WinSta0\Winlogon ring-0, khác với màn hình khóa thông thường).
 - Stream dạng JPEG: mượt cho văn bản/quản trị; chơi game/video tốc độ cao không phải mục tiêu.
 - Chỉ chạy một viewer qua relay tại một thời điểm (máy đang có người xem thì người khác bị từ chối);
   trong LAN cho phép nhiều viewer cùng lúc.
-- PWA/service worker chỉ đăng ký trên `localhost` hoặc HTTPS (LAN dùng HTTP vẫn cài được shortcut).
+- PWA/service worker chỉ đăng ký trên `localhost` hoặc HTTPS.
+- **Headless + overlay**: khi chạy `--headless`, cửa sổ overlay không xuất hiện —
+  thay vào đó in cảnh báo console `⚠ CẢnh BÁO: đang có N viewer…`.
+  Hotkey Ctrl+Alt+Shift+F12 vẫn hoạt động trong headless.
+- **Relay ngủ (Render free)**: PWA tự retry với backoff đến 30s tổng; thanh vàng đếm giây
+  xuất hiện sau 3s chờ, nút Hủy để hủy kết nối.
+
+## Sprint 0.3 — Độ tin cậy relay & overlay an toàn
+
+### Deploy relay không ngủ
+
+Xem hướng dẫn đầy đủ tại [`docs/DEPLOY_RELAY.md`](docs/DEPLOY_RELAY.md).
+
+| Tùy chọn | Chi phí | Relay ngủ? |
+|---|---|---|
+| **VPS (Hetzner/DO/Vultr)** | ~$4–6/tháng | Không |
+| **Fly.io** | ~$0–2/tháng | **Không** (cấu hình `auto_stop=false`) |
+| **Oracle Cloud Free** | **Miễn phí vĩnh viễn** | Không |
+| Render free tier | $0 | ⚠ Có — ngủ sau 15 phút |
+
+Triển khai Fly.io nhanh:
+```bash
+cp relay/relay_server.py deploy/relay_server.py
+fly launch --no-deploy --config deploy/fly.toml
+fly secrets set RELAY_METRICS_TOKEN="$(openssl rand -hex 32)"
+fly deploy --config deploy/fly.toml
+```
+
+### Overlay đang-bị-điều-khiển
+
+- Khi có ≥1 viewer xác thực: thanh cam nhỏ luôn nổi góc trên phải màn hình:
+  `TouchLink: đang được điều khiển từ <IP che bớt> • [Ngắt kết nối]`
+- Nút **Ngắt kết nối**: đóng tất cả viewer ngay lập tức
+- Phím nóng khẩn cấp: **Ctrl+Alt+Shift+F12** (RegisterHotKey, hoạt động cả khi app không focus)
+- `--headless`: không có overlay; in `⚠ CẢnh BÁO` ra console khi có viewer kết nối
+- **Không có cơ chế ẩn overlay** (by design)
+
+### Xác nhận kết nối mới (consent)
+
+Khi bật trong Cài đặt → Xác nhận kết nối:
+- Hộp thoại Cho phép / Chỉ xem / Từ chối hiện khi có viewer mới muốn kết nối
+- Timeout 30 giây → tự động từ chối
+- Mặc định: BẬT cho relay, TẮT cho LAN
+- `--headless`: luôn từ chối (không thể hiện dialog)
+
+### PWA đánh thức relay
+
+- Relay mode: nếu WS mở > 3s chưa phản hồi → hiện thanh vàng "Đang đánh thức…" + đếm giây
+- Retry backoff: 1 → 2 → 4 → 8 → 15s (tổng 5 lần thử)
+- Nút Hủy kết nối ngay lập tức
+- Sau 5 lần thất bại: hiện thông báo lỗi rõ ràng
+
 
 ## Bảo mật
 
-- Chỉ người có ID + mật khẩu mới kết nối được; sai 5 lần trong 5 phút → khóa IP 3 phút.
+- Chỉ người có ID + mật khẩu mới kết nối được; sai 5 lần trong 5 phút → khóa IP 3 phút
+  (cả ở agent — chế độ LAN — lẫn relay — chế độ internet).
 - Mật khẩu lưu mã hóa DPAPI trong `config.json`; không gửi kèm URL/QR.
-- Không có cơ chế ẩn mình/khởi động cùng Windows — app hiện cửa sổ rõ ràng khi đang chạy
-  (đúng mục đích hỗ trợ từ xa chính đáng).
+- **Mô hình xác minh:** **agent (máy tính) xác minh mật khẩu** — relay chỉ chuyển tiếp
+  plaintext password từ viewer về agent rồi agent gọi `verify_password()` để kiểm tra
+  (DPAPI hash); relay không biết mật khẩu đúng/sai.
+- **E2E trên relay (Sprint 2.2):** khi cả hai bên hỗ trợ `e2e-v1`, session sẽ dùng X25519 ephemeral
+  + Ed25519 identity signature + HKDF-SHA256 để sinh khóa, rồi AES-256-GCM mã hóa từng message.
+  Relay chỉ thấy ciphertext; replay / out-of-order nonce bị từ chối; 1 bit thay đổi làm giải mã thất bại.
+- **Mã dùng một lần:** mặc định 10 ký tự, bảng chữ không mơ hồ, thời hạn 10 phút, đổi sau khi dùng.
+  Chế độ mật khẩu cố định chỉ cho LAN và phải bật thủ công kèm cảnh báo rõ ràng.
+- **Relay rate-limit (Sprint 0.2):** sliding-window giới hạn kết nối mới và số lần connect
+  theo IP và ID; chống dò ID — tất cả lỗi connect trả cùng message + jitter delay 50–150ms;
+  log JSON Lines không ghi mật khẩu, phím, frame.
+- **Cảnh báo bảo mật:** relay công cộng vẫn là tầng trung gian, nhưng với `e2e-v1` nó không thể đọc nội dung
+  payload mà chỉ chuyển tiếp ciphertext. Nếu `require_e2e` bật trên relay, mọi kết nối không hỗ trợ E2E sẽ bị từ chối.
+- Không có cơ chế ẩn mình/khởi động cùng Windows — app hiện cửa sổ rõ ràng khi đang chạy.
 - Khi cho ra internet: bật relay trên VPS riêng + TLS, đặt mật khẩu mạnh (nút tạo mật khẩu).
 
 ## License

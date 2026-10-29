@@ -4,7 +4,11 @@ DPAPI gắn với user + máy, chỉ tiến trình của chính user này giải
 """
 import base64
 import ctypes
+import hashlib
+import hmac
 import os
+import time
+from threading import Lock
 
 from ctypes import wintypes
 
@@ -63,3 +67,52 @@ def verify_password(pw: str, enc: str) -> bool:
         return False
     import secrets as _s
     return _s.compare_digest(pw.encode("utf-8"), stored.encode("utf-8"))
+
+
+class ResumeTokenStore:
+    """Simple in-memory one-time session token store."""
+
+    def __init__(self):
+        self._tokens = {}
+        self._lock = Lock()
+
+    def issue(self, device_id: str, ttl_seconds: int = 120) -> str:
+        token = hashlib.sha256(os.urandom(16)).hexdigest()
+        expires = time.time() + max(1, int(ttl_seconds))
+        with self._lock:
+            self._tokens[token] = {"device_id": str(device_id), "expires": expires, "used": False}
+        return token
+
+    def consume(self, token: str, device_id: str) -> bool:
+        if not token:
+            return False
+        with self._lock:
+            entry = self._tokens.get(token)
+            if entry is None:
+                return False
+            if entry["used"] or entry["device_id"] != str(device_id):
+                self._tokens.pop(token, None)
+                return False
+            if time.time() > entry["expires"]:
+                self._tokens.pop(token, None)
+                return False
+            entry["used"] = True
+            self._tokens[token] = entry
+            return True
+
+    def invalidate(self, device_id: str):
+        with self._lock:
+            for token, entry in list(self._tokens.items()):
+                if entry.get("device_id") == str(device_id):
+                    self._tokens.pop(token, None)
+
+
+resume_tokens = ResumeTokenStore()
+
+
+def issue_resume_token(device_id: str, ttl_seconds: int = 120) -> str:
+    return resume_tokens.issue(device_id, ttl_seconds)
+
+
+def consume_resume_token(token: str, device_id: str) -> bool:
+    return resume_tokens.consume(token, device_id)

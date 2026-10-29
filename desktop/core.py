@@ -7,12 +7,23 @@ import hashlib
 import platform
 import queue
 import struct
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import config as cfgmod
 import secure
-from capture import grab_jpeg, list_monitors
+from adaptive import AdaptiveController
+from capture import (
+    grab_jpeg,
+    list_monitors,
+    make_capturer,
+    TileEngine,
+    scale_frame,
+    TILE_SIZE_DEFAULT,
+    Frame,
+)
 import input_control as inp
 
 VERSION = cfgmod.VERSION
@@ -26,19 +37,63 @@ cfg = {}                 # tham chiếu config (device_id, password_enc...)
 events = None            # queue.Queue cho GUI
 counters = {"events": 0, "frames": 0, "auth_fails": 0}
 limiter = None           # RateLimiter, gắn từ server.py
+adaptive = AdaptiveController()
 
 _loop = None
 _pool = None
 _last_clip_hash = None
 screen_locked = False
+_svc_ok = None  # None = chưa thử; True/False = service TouchLinkSvc có/không
+_svc_checked_at = 0.0
+
+# --- Capture backend (DXGI hoặc MSS) ---
+_capturer: Any = None           # instance Capturer
+_capturer_lock = threading.Lock()
+_capturer_monitor: int = -1     # monitor index đang dùng
+
+# Khoảng gian keyframe toàn khung (giây)
+_KEYFRAME_INTERVAL: float = 10.0
+# Giới hạn kích thước payload nhị phân (8 MiB)
+_MAX_FRAME_BYTES: int = 8 * 1024 * 1024
+
+
+def svc_available(force=False):
+    """Service TouchLinkSvc có chạy không (cache 10 giây)."""
+    global _svc_ok, _svc_checked_at
+    now = time.time()
+    if force or _svc_ok is None or now - _svc_checked_at > 10:
+        try:
+            import svcpipe
+            _svc_ok = svcpipe.ping() is not None
+        except Exception:
+            _svc_ok = False
+        _svc_checked_at = now
+    return _svc_ok
+
+
+def _svc_mark_down():
+    global _svc_ok, _svc_checked_at
+    _svc_ok = False
+    _svc_checked_at = time.time()
 
 
 def _push_lock(locked):
     global screen_locked
     screen_locked = bool(locked)
+    svc = False
+    if screen_locked:
+        try:
+            svc = svc_available(force=True)
+        except Exception:
+            svc = False
+        if svc:
+            log("Màn hình khóa → chuyển sang điều khiển qua service TouchLinkSvc")
+            broadcast_event("history", ("server",
+                "Màn hình khóa: điều khiển qua TouchLinkSvc"))
     if _loop is not None and _loop.is_running():
         async def _b():
-            await broadcast_json({"type": "screen_locked", "locked": bool(locked)})
+            await broadcast_json({"type": "screen_locked",
+                                  "locked": bool(locked), "svc": bool(svc)})
         try:
             asyncio.run_coroutine_threadsafe(_b(), _loop)
         except Exception:
@@ -65,7 +120,7 @@ def _start_lock_watcher():
                 _push_lock(locked)
                 if locked:
                     log("⚠ Màn hình máy tính đang BỊ KHÓA — Windows không cho xem/"
-                        "điều khiển từ xa ở trạng thái này. Phải mở khóa trực tiếp.")
+                        "điều khiển từ phiên người dùng.")
                     broadcast_event("history", ("server", "Màn hình bị khóa"))
                 else:
                     log("Màn hình đã mở khóa.")
@@ -85,6 +140,8 @@ def init(cfg_ref, events_q, rate_limiter=None):
     settings["keep_awake"] = bool(settings.get("keep_awake", True))
     _pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="capture")
     log("TouchLink core sẵn sàng (safe_test=%s)" % inp.SAFE_TEST)
+    # Khởi tạo capturer DXGI/MSS ngay khi init để phát hiện sớm
+    _ensure_capturer(int(settings["monitor"]))
     try:
         _start_lock_watcher()
     except Exception as e:
@@ -135,6 +192,9 @@ class ClientConn:
     Frame màn hình đi qua mailbox "chỉ giữ frame mới nhất": viewer chậm
     (mạng yếu) bỏ qua frame cũ, không bao giờ chặn viewer khác hay vòng
     chụp màn hình (head-of-line blocking).
+
+    Nếu viewer khai báo cap "tiles" trong hello → nhận frame 0x02 (dirty tile).
+    Ngược lại → nhận frame 0x01 (toàn khung JPEG, tương thích cũ).
     """
 
     def __init__(self, name, send_json, send_bytes, close):
@@ -144,16 +204,40 @@ class ClientConn:
         self._send_bytes = send_bytes
         self._close = close
         self.alive = True
-        self._frame = None
+        self.caps: list[str] = []          # ghi nhận sau khi nhận hello
+        # Mailbox: chỉ giữ payload nhị phân mới nhất
+        self._frame: bytes | None = None
         self._frame_evt = asyncio.Event()
         self._sender_task = None
+        # TileEngine riêng cho viewer này
+        self.tile_engine = TileEngine(TILE_SIZE_DEFAULT)
+        # Cờ yêu cầu keyframe tiếp theo
+        self._need_keyframe: bool = True
+
+    @property
+    def supports_tiles(self) -> bool:
+        """Viewer có khai báo cap 'tiles' không."""
+        return "tiles" in self.caps
+
+    def request_keyframe(self) -> None:
+        """Đặt cờ yêu cầu keyframe toàn khung cho lần gửi tiếp theo."""
+        self._need_keyframe = True
+        self.tile_engine.reset()
 
     def start_sender(self):
         if self._sender_task is None:
             self._sender_task = asyncio.get_running_loop().create_task(self._sender())
 
-    def offer_frame(self, data):
-        if not self.alive:
+    def offer_frame(self, data: bytes | None) -> None:
+        """Đẩy payload nhị phân vào mailbox.
+
+        None có nghĩa: màn hình tĩnh, không gửi gì (heartbeat được
+        xử lý riêng bởi stream_loop).
+        """
+        if not self.alive or data is None:
+            return
+        if len(data) > _MAX_FRAME_BYTES:
+            log("offer_frame: payload quá lớn (%d B), bỏ qua" % len(data))
             return
         self._frame = data  # chỉ giữ frame mới nhất
         self._frame_evt.set()
@@ -169,6 +253,8 @@ class ClientConn:
             self._frame_evt = asyncio.Event()
             data = self._frame
             self._frame = None
+            if data is None:
+                continue
             try:
                 await asyncio.wait_for(self.send_bytes(data), timeout=6)
             except Exception:
@@ -206,6 +292,11 @@ def clients_snapshot():
 
 
 async def remove_client(conn, reason=""):
+    try:
+        if hasattr(inp, "release_all"):
+            inp.release_all()
+    except Exception:
+        pass
     t = getattr(conn, "_sender_task", None)
     if t is not None:
         t.cancel()
@@ -234,6 +325,7 @@ async def broadcast_json(data, exclude=None):
 
 def auth_ok_payload():
     host = platform.node()
+    cap_name = _capturer.name if _capturer is not None else "mss"
     return {
         "type": "auth_ok",
         "device_id": cfg.get("device_id", ""),
@@ -242,7 +334,11 @@ def auth_ok_payload():
         "settings": dict(settings),
         "monitors": list_monitors(),
         "screen_locked": bool(screen_locked),
+        "svc_ok": bool(screen_locked and svc_available()),
         "safe_test": inp.SAFE_TEST,
+        "capturer": cap_name,
+        "resume_token": secure.issue_resume_token(cfg.get("device_id", ""), ttl_seconds=120),
+        "adaptive": adaptive.state(),
     }
 
 
@@ -250,6 +346,19 @@ async def verify_and_accept(conn, auth_msg):
     """Kiểm tra ID + mật khẩu từ message đầu tiên. Trả về True nếu OK."""
     device_id = str(auth_msg.get("id") or auth_msg.get("device_id") or "")
     password = str(auth_msg.get("password") or "")
+    resume_token = str(auth_msg.get("resume_token") or "")
+
+    if resume_token:
+        ok = secure.consume_resume_token(resume_token, device_id)
+        if ok:
+            return True
+        counters["auth_fails"] += 1
+        try:
+            await conn.send_json({"type": "auth_fail", "message": "Resume token không hợp lệ hoặc đã hết hạn"})
+        except Exception:
+            pass
+        return False
+
     ok = (device_id == str(cfg.get("device_id", "")) and
           secure.verify_password(password, cfg.get("password_enc") or ""))
     if not ok:
@@ -285,6 +394,17 @@ async def handle_client_message(conn, msg):
         broadcast_event("chat", (conn.name, text))
     elif t == "ping":
         await conn.send_json({"type": "pong", "t": msg.get("t")})
+    elif t == "hello":
+        # Viewer gửi hello sau auth_ok — ghi nhận caps
+        caps = msg.get("caps") or []
+        if isinstance(caps, list):
+            conn.caps = [str(c) for c in caps]
+        if conn.supports_tiles:
+            log("%s hỗ trợ tile frame (0x02)" % conn.name)
+        conn.request_keyframe()
+    elif t == "keyframe":
+        # Viewer yêu cầu keyframe toàn khung (ví dụ: sau khi mất gói)
+        conn.request_keyframe()
     # bỏ qua các type khác
 
 
@@ -293,13 +413,6 @@ async def _handle_input(msg):
     kind = inp_msg.get("kind")
     if kind == "mouse":
         action = inp_msg.get("action", "move")
-        if action == "move" and inp_msg.get("rel") is not None:
-            try:
-                dx, dy = inp_msg["rel"]
-                inp.mouse("moverel", int(dx), int(dy))
-            except Exception:
-                pass
-            return
         x, y = inp_msg.get("x"), inp_msg.get("y")
         px = py = None
         if x is not None and y is not None and meta["width"]:
@@ -310,6 +423,26 @@ async def _handle_input(msg):
                 py = meta["top"] + max(0, min(meta["height"] - 1, int(round(fy))))
             except Exception:
                 return
+        if screen_locked and svc_available():
+            op = {"kind": "mouse", "action": action, "button": inp_msg.get("button", "left"),
+                  "clicks": inp_msg.get("clicks", 1), "_geom": dict(meta)}
+            if action == "move" and inp_msg.get("rel") is not None:
+                op["rel"] = inp_msg["rel"]
+            else:
+                op["x"], op["y"] = px, py
+            if action == "scroll":
+                op["amount"] = int(inp_msg.get("amount", 0) or 0)
+                op["hamount"] = int(inp_msg.get("hamount", 0) or 0)
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: _svc_input(op))
+            return
+        if action == "move" and inp_msg.get("rel") is not None:
+            try:
+                dx, dy = inp_msg["rel"]
+                inp.mouse("moverel", int(dx), int(dy))
+            except Exception:
+                pass
+            return
         amount = int(inp_msg.get("amount", 0) or 0)
         hamount = int(inp_msg.get("hamount", 0) or 0)
         if action == "scroll":
@@ -325,11 +458,29 @@ async def _handle_input(msg):
         key = str(inp_msg.get("key", ""))
         mods = inp_msg.get("mods") or []
         if key:
+            if screen_locked and svc_available():
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: _svc_input({"kind": "key", "key": key, "mods": list(mods)}))
+                return
             inp.tap_key(key, mods)
     elif kind == "text":
         text = str(inp_msg.get("text", ""))[:2000]
         if text:
+            if screen_locked and svc_available():
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: _svc_input({"kind": "text", "text": text}))
+                return
             inp.type_text(text)
+
+
+def _svc_input(op):
+    try:
+        import svcpipe
+        return svcpipe.send_input(op)
+    except Exception as e:
+        _svc_mark_down()
+        log("Service input lỗi: %s" % e)
+        return {"ok": False}
 
 
 async def _handle_settings(conn, msg):
@@ -372,8 +523,11 @@ async def _handle_settings(conn, msg):
 
 
 async def _send_meta_to_all():
-    # buộc frame kế tiếp mang meta mới; client tự đọc w/h từ header frame
-    pass
+    """Khi đổi màn hình / scale: reset TileEngine mọi viewer → gửi keyframe."""
+    for c in list(clients):
+        c.request_keyframe()
+    # Đổi capturer sang màn hình mới
+    _ensure_capturer(int(settings["monitor"]))
 
 
 def _clipboard_get():
@@ -396,10 +550,98 @@ def _clipboard_set(text):
         pass
 
 
+def _grab_any(mon: int, scale: int, quality: int):
+    """Chụp màn hình: qua service TouchLinkSvc khi màn hình khóa, không thì chụp trực tiếp.
+
+    Hàm tương thích ngược — chỉ dùng cho service path và code cũ.
+    Stream chính dùng _grab_frame() trả Frame object.
+    """
+    if screen_locked and svc_available():
+        try:
+            import svcpipe
+            return svcpipe.grab(mon, scale, quality)
+        except Exception as e:
+            _svc_mark_down()
+            log("Service grab lỗi (%s) — tạm quay về chụp trực tiếp" % e)
+    return grab_jpeg(mon, scale, quality)
+
+
+def _ensure_capturer(monitor: int) -> None:
+    """Đảm bảo capturer đang chạy cho đúng monitor; khởi động lại nếu cần."""
+    global _capturer, _capturer_monitor
+    with _capturer_lock:
+        if _capturer is not None and _capturer_monitor == monitor:
+            return
+        # Dừng capturer cũ
+        if _capturer is not None:
+            try:
+                _capturer.stop()
+            except Exception as exc:
+                log("capturer.stop() lỗi: %s" % exc)
+            _capturer = None
+        cap = make_capturer(prefer_dxgi=True)
+        try:
+            cap.start(monitor)
+            _capturer = cap
+            _capturer_monitor = monitor
+            log("Capturer '%s' đã bắt đầu (monitor=%d)" % (cap.name, monitor))
+        except Exception as exc:
+            log("Capturer '%s' start lỗi (%s) → fallback MSS" % (cap.name, exc))
+            # Fallback tường minh về MSS
+            from capture.mss_capturer import MssCapturer
+            fallback = MssCapturer()
+            fallback.start(monitor)
+            _capturer = fallback
+            _capturer_monitor = monitor
+            log("Capturer 'mss' đã bắt đầu (fallback, monitor=%d)" % monitor)
+
+
+def _grab_frame_raw(mon: int, scale: int) -> "Frame | None":
+    """Chụp một frame thô bằng capturer hiện tại.
+
+    Gọi từ thread pool (không phải event-loop).
+    Trả về Frame hoặc None nếu chưa có dữ liệu.
+    """
+    import copy
+    _ensure_capturer(mon)
+    cap = _capturer
+    if cap is None:
+        return None
+    frame = cap.grab()
+    if frame is None:
+        return None
+    # Scale nếu cần
+    if scale < 100:
+        try:
+            arr = scale_frame(frame.data, scale)
+        except Exception:
+            arr = frame.data
+    else:
+        arr = frame.data
+    # Trả về Frame mới với data đã scale
+    f2 = copy.copy(frame)
+    f2.data = arr
+    if scale < 100 and hasattr(arr, "shape"):
+        f2.width = arr.shape[1]
+        f2.height = arr.shape[0]
+    return f2
+
+
 async def stream_loop():
-    """Vòng lặp chính: chụp màn hình -> nén JPEG -> gửi tới mọi viewer."""
+    """Vòng lặp chính: chụp màn hình → tile/JPEG → gửi tới mọi viewer.
+
+    Luồng xử lý:
+    1. Chụp Frame thô bằng capturer (DXGI/MSS) trong thread pool.
+    2. Với mỗi viewer: TileEngine.process() tính payload riêng
+       (0x02 tile hoặc 0x01 keyframe tuỳ caps viewer).
+    3. Màn hình tĩnh: không offer_frame; chỉ gửi heartbeat ping 5 giây.
+    4. Viewer không hỗ trợ tiles: luôn nhận 0x01 toàn khung từ TileEngine.
+    """
     global _last_clip_hash
-    header_fmt = struct.Struct(">BHH")
+    import numpy as np
+    _heartbeat_interval = 5.0  # giây
+    _last_heartbeat = time.monotonic()
+
     while True:
         try:
             interval = 1.0 / max(2, int(settings["fps"]))
@@ -409,19 +651,91 @@ async def stream_loop():
                 scale = int(settings["scale"])
                 quality = int(settings["quality"])
                 loop = asyncio.get_running_loop()
-                jpeg, m = await loop.run_in_executor(_pool, grab_jpeg, mon, scale, quality)
-                meta.update(m)
-                payload = header_fmt.pack(1, m["fw"], m["fh"]) + jpeg
-                counters["frames"] += 1
-                # mailbox: mỗi viewer tự lấy frame mới nhất, không chặn nhau
+
+                # --- Chụp frame trong thread pool ---
+                if screen_locked and svc_available():
+                    # Khi màn hình khóa: dùng service grab trả (jpeg_bytes, meta)
+                    jpeg_meta = await loop.run_in_executor(
+                        _pool, _grab_any, mon, scale, quality
+                    )
+                    if jpeg_meta is not None:
+                        jpeg, m = jpeg_meta
+                        meta.update(m)
+                        header_fmt = struct.Struct(">BHH")
+                        payload_full = header_fmt.pack(1, m["fw"], m["fh"]) + jpeg
+                        counters["frames"] += 1
+                        for c in list(clients):
+                            c.offer_frame(payload_full)
+                    elapsed = time.monotonic() - t0
+                    await asyncio.sleep(max(0.001, interval - elapsed))
+                    continue
+
+                # --- Normal path: dùng capturer DXGI/MSS ---
+                raw_frame: Frame | None = await loop.run_in_executor(
+                    _pool, _grab_frame_raw, mon, scale
+                )
+                if raw_frame is None:
+                    await asyncio.sleep(0.02)
+                    continue
+
+                # Cập nhật meta chung
+                meta.update({
+                    "left": raw_frame.mon_left,
+                    "top": raw_frame.mon_top,
+                    "width": raw_frame.mon_width,
+                    "height": raw_frame.mon_height,
+                    "fw": raw_frame.width,
+                    "fh": raw_frame.height,
+                })
+
+                arr = raw_frame.data  # numpy RGB (H, W, 3)
+                any_dirty = False
+
                 for c in list(clients):
-                    c.offer_frame(payload)
-                # đồng bộ clipboard nếu bật
+                    force_kf = c._need_keyframe
+                    c._need_keyframe = False
+
+                    if c.supports_tiles:
+                        # Encode tile riêng cho viewer này
+                        payload = await loop.run_in_executor(
+                            _pool,
+                            _encode_for_viewer,
+                            c.tile_engine, arr, quality, force_kf,
+                        )
+                    else:
+                        # Viewer cũ: luôn gửi 0x01 toàn khung
+                        payload = await loop.run_in_executor(
+                            _pool,
+                            _encode_full_frame,
+                            c.tile_engine, arr, quality, force_kf,
+                        )
+
+                    if payload is not None:
+                        any_dirty = True
+                        c.offer_frame(payload)
+
+                if any_dirty:
+                    counters["frames"] += 1
+
+                # Heartbeat khi tĩnh
+                now = time.monotonic()
+                if not any_dirty and now - _last_heartbeat >= _heartbeat_interval:
+                    _last_heartbeat = now
+                    await broadcast_json({"type": "ping", "t": int(now * 1000)})
+                elif any_dirty:
+                    _last_heartbeat = now
+
+                # Đồng bộ clipboard
                 if settings.get("clipboard_sync"):
                     text = _clipboard_get()
-                    if text and hashlib.md5(text.encode("utf-8", "ignore")).hexdigest() != _last_clip_hash:
-                        _last_clip_hash = hashlib.md5(text.encode("utf-8", "ignore")).hexdigest()
-                        await broadcast_json({"type": "clipboard", "text": text[:20000]})
+                    if text:
+                        h = hashlib.md5(text.encode("utf-8", "ignore")).hexdigest()
+                        if h != _last_clip_hash:
+                            _last_clip_hash = h
+                            await broadcast_json(
+                                {"type": "clipboard", "text": text[:20000]}
+                            )
+
                 elapsed = time.monotonic() - t0
                 await asyncio.sleep(max(0.001, interval - elapsed))
             else:
@@ -432,3 +746,50 @@ async def stream_loop():
         except Exception as e:
             log("stream_loop lỗi: %s" % e)
             await asyncio.sleep(0.5)
+
+
+def _encode_for_viewer(
+    engine: TileEngine,
+    arr,
+    quality: int,
+    force_keyframe: bool,
+) -> bytes | None:
+    """Encode frame cho viewer hỗ trợ tiles (0x02 hoặc 0x01 keyframe).
+
+    Gọi từ thread pool.
+    """
+    return engine.process(
+        arr,
+        quality,
+        force_keyframe=force_keyframe,
+        keyframe_interval=_KEYFRAME_INTERVAL,
+    )
+
+
+def _encode_full_frame(
+    engine: TileEngine,
+    arr,
+    quality: int,
+    force_keyframe: bool,
+) -> bytes | None:
+    """Encode toàn khung 0x01 cho viewer cũ (không hỗ trợ tiles).
+
+    Gọi từ thread pool. Dùng TileEngine chỉ để detect tĩnh/động.
+    """
+    result = engine.process(
+        arr,
+        quality,
+        force_keyframe=force_keyframe,
+        keyframe_interval=_KEYFRAME_INTERVAL,
+    )
+    if result is None:
+        return None  # tĩnh
+    # Nếu kết quả là 0x02 tile → convert sang 0x01 toàn khung
+    if result[0:1] == b'\x02':
+        # Fallback: gửi keyframe toàn khung
+        engine.reset()
+        result = engine.process(
+            arr, quality, force_keyframe=True,
+            keyframe_interval=_KEYFRAME_INTERVAL,
+        )
+    return result
