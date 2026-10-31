@@ -10,11 +10,10 @@ import hashlib
 import hmac
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-
 
 RTC_SIGNAL_TYPES = {"rtc_offer", "rtc_answer", "rtc_ice", "rtc_bye"}
 MAX_SIGNAL_BYTES = 1024 * 1024
@@ -24,14 +23,14 @@ MAX_SIGNAL_BYTES = 1024 * 1024
 class RTCSignalMessage:
     type: str
     device_id: str
-    sdp: Optional[str] = None
-    candidate: Optional[str] = None
-    signature: Optional[str] = None
-    signer: Optional[str] = None
+    sdp: str | None = None
+    candidate: str | None = None
+    signature: str | None = None
+    signer: str | None = None
     version: str = "rtc-v1"
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         payload = {
             "type": self.type,
             "device_id": self.device_id,
@@ -95,8 +94,8 @@ def validate_webrtc_signal(message: Any) -> bool:
     return True
 
 
-def create_turn_credential(secret: str, *, device_id: str, ttl_s: int = 300, now: Optional[float] = None) -> Dict[str, Any]:
-    timestamp = int((now if now is not None else time.time()))
+def create_turn_credential(secret: str, *, device_id: str, ttl_s: int = 300, now: float | None = None) -> dict[str, Any]:
+    timestamp = int(now if now is not None else time.time())
     ttl = max(1, int(ttl_s))
     username = f"{timestamp}:{ttl}:{device_id}"
     credential = hmac.new(str(secret).encode("utf-8"), username.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -110,7 +109,7 @@ def create_turn_credential(secret: str, *, device_id: str, ttl_s: int = 300, now
     }
 
 
-def verify_turn_credential(secret: str, username: str, credential: str, *, device_id: str, now: Optional[float] = None) -> bool:
+def verify_turn_credential(secret: str, username: str, credential: str, *, device_id: str, now: float | None = None) -> bool:
     if not username or not credential:
         return False
     try:
@@ -130,8 +129,8 @@ def verify_turn_credential(secret: str, username: str, credential: str, *, devic
 
 __all__ = [
     "MAX_SIGNAL_BYTES",
-    "RTCSignalMessage",
     "RTC_SIGNAL_TYPES",
+    "RTCSignalMessage",
     "create_turn_credential",
     "sign_sdp",
     "validate_webrtc_signal",

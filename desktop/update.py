@@ -3,12 +3,12 @@ from __future__ import annotations
 import base64
 import json
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-
 
 _VERSION_PART_RE = re.compile(r"\d+")
 
@@ -90,10 +90,7 @@ def verify_manifest(
         return False
 
     published_at = _parse_time(manifest.get("published_at"))
-    if published_at is not None and published_at > now:
-        return False
-
-    return True
+    return not (published_at is not None and published_at > now)
 
 
 __all__ = ["sign_manifest", "verify_manifest"]

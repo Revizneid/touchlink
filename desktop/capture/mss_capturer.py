@@ -6,15 +6,11 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING
 
 import mss
 from PIL import Image
 
-from .base import Capturer, Frame, Rect
-
-if TYPE_CHECKING:
-    pass
+from .base import Frame, Rect
 
 logger = logging.getLogger(__name__)
 

@@ -116,7 +116,7 @@ def get_system_metrics(index: int) -> int:
         return 0
 
 
-def normalize_absolute_xy(x: int | float, y: int | float, left: int = 0, top: int = 0, width: int = 1, height: int = 1):
+def normalize_absolute_xy(x: float, y: float, left: int = 0, top: int = 0, width: int = 1, height: int = 1):
     """Chuẩn hóa tọa độ tuyệt đối thành 0..65535 cho MOUSEEVENTF_ABSOLUTE."""
     width = max(1, int(width))
     height = max(1, int(height))
@@ -352,11 +352,11 @@ class WindowsSendInputBackend(InputBackend):
 
 
 __all__ = [
+    "KEYMAP",
+    "MODS",
     "InputBackend",
     "SafeBackend",
     "WindowsSendInputBackend",
-    "KEYMAP",
-    "MODS",
     "normalize_absolute_xy",
     "resolve_key",
 ]

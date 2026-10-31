@@ -5,7 +5,6 @@
 import asyncio
 import hashlib
 import platform
-import queue
 import struct
 import threading
 import time
@@ -13,18 +12,18 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import config as cfgmod
+import input_control as inp
 import secure
 from adaptive import AdaptiveController
 from capture import (
+    TILE_SIZE_DEFAULT,
+    Frame,
+    TileEngine,
     grab_jpeg,
     list_monitors,
     make_capturer,
-    TileEngine,
     scale_frame,
-    TILE_SIZE_DEFAULT,
-    Frame,
 )
-import input_control as inp
 
 VERSION = cfgmod.VERSION
 
@@ -139,13 +138,13 @@ def init(cfg_ref, events_q, rate_limiter=None):
             settings[k] = cfg_ref[k]
     settings["keep_awake"] = bool(settings.get("keep_awake", True))
     _pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="capture")
-    log("TouchLink core sẵn sàng (safe_test=%s)" % inp.SAFE_TEST)
+    log(f"TouchLink core sẵn sàng (safe_test={inp.SAFE_TEST})")
     # Khởi tạo capturer DXGI/MSS ngay khi init để phát hiện sớm
     _ensure_capturer(int(settings["monitor"]))
     try:
         _start_lock_watcher()
     except Exception as e:
-        log("lock-watcher lỗi: %s" % e)
+        log(f"lock-watcher lỗi: {e}")
     try:
         import keepawake
         keepawake.set_awake(bool(settings["keep_awake"]))
@@ -153,18 +152,19 @@ def init(cfg_ref, events_q, rate_limiter=None):
         if keepawake.keeper.last_ok is False:
             log("CẢNH BÁO: Windows từ chối SetThreadExecutionState")
     except Exception as e:
-        log("keep-awake lỗi: %s" % e)
+        log(f"keep-awake lỗi: {e}")
 
 
 def log(msg):
-    line = "[%s] %s" % (time.strftime("%H:%M:%S"), msg)
+    safe_msg = str(msg).encode("ascii", "replace").decode("ascii")
+    line = "[{}] {}".format(time.strftime("%H:%M:%S"), safe_msg)
     try:
-        print(line, flush=True)  # stdout có thể là None (exe GUI) hoặc không hỗ trợ UTF-8
+        print(line, flush=True)  # stdout co the la None (exe GUI) hoặc không hỗ trợ UTF-8
     except Exception:
         pass
     if events is not None:
         try:
-            events.put(("log", msg))
+            events.put(("log", safe_msg))
         except Exception:
             pass
 
@@ -282,7 +282,7 @@ async def add_client(conn):
     conn.start_sender()
     broadcast_event("clients", len(clients))
     broadcast_event("log", "Viewer kết nối: %s (tổng %d)" % (conn.name, len(clients)))
-    broadcast_event("history", ("viewer", "Kết nối: %s" % conn.name))
+    broadcast_event("history", ("viewer", f"Kết nối: {conn.name}"))
     await broadcast_json({"type": "clients", "n": len(clients)})
 
 
@@ -305,7 +305,7 @@ async def remove_client(conn, reason=""):
         conn.alive = False
         broadcast_event("clients", len(clients))
         broadcast_event("log", "Viewer rời khỏi: %s %s (còn %d)" % (conn.name, reason, len(clients)))
-        broadcast_event("history", ("viewer", "Ngắt: %s %s" % (conn.name, reason)))
+        broadcast_event("history", ("viewer", f"Ngắt: {conn.name} {reason}"))
         await broadcast_json({"type": "clients", "n": len(clients)})
     try:
         await conn.close()
@@ -400,7 +400,7 @@ async def handle_client_message(conn, msg):
         if isinstance(caps, list):
             conn.caps = [str(c) for c in caps]
         if conn.supports_tiles:
-            log("%s hỗ trợ tile frame (0x02)" % conn.name)
+            log(f"{conn.name} hỗ trợ tile frame (0x02)")
         conn.request_keyframe()
     elif t == "keyframe":
         # Viewer yêu cầu keyframe toàn khung (ví dụ: sau khi mất gói)
@@ -419,8 +419,8 @@ async def _handle_input(msg):
             try:
                 fx = float(x) * meta["width"] / max(1, meta["fw"])
                 fy = float(y) * meta["height"] / max(1, meta["fh"])
-                px = meta["left"] + max(0, min(meta["width"] - 1, int(round(fx))))
-                py = meta["top"] + max(0, min(meta["height"] - 1, int(round(fy))))
+                px = meta["left"] + max(0, min(meta["width"] - 1, round(fx)))
+                py = meta["top"] + max(0, min(meta["height"] - 1, round(fy)))
             except Exception:
                 return
         if screen_locked and svc_available():
@@ -479,7 +479,7 @@ def _svc_input(op):
         return svcpipe.send_input(op)
     except Exception as e:
         _svc_mark_down()
-        log("Service input lỗi: %s" % e)
+        log(f"Service input lỗi: {e}")
         return {"ok": False}
 
 
@@ -512,8 +512,8 @@ async def _handle_settings(conn, msg):
             import keepawake
             keepawake.set_awake(bool(settings["keep_awake"]))
             state = "bật" if settings["keep_awake"] else "tắt"
-            log("Giữ máy thức (ngăn sleep): %s" % state)
-            broadcast_event("history", ("setting", "Ngăn máy tính sleep: %s" % state))
+            log(f"Giữ máy thức (ngăn sleep): {state}")
+            broadcast_event("history", ("setting", f"Ngăn máy tính sleep: {state}"))
         except Exception:
             pass
     await broadcast_json({"type": "settings", "settings": dict(settings)})
@@ -537,7 +537,7 @@ def _clipboard_get():
         import pyperclip
         return pyperclip.paste() or ""
     except Exception as e:
-        return "(lỗi clipboard: %s)" % e
+        return f"(lỗi clipboard: {e})"
 
 
 def _clipboard_set(text):
@@ -562,7 +562,7 @@ def _grab_any(mon: int, scale: int, quality: int):
             return svcpipe.grab(mon, scale, quality)
         except Exception as e:
             _svc_mark_down()
-            log("Service grab lỗi (%s) — tạm quay về chụp trực tiếp" % e)
+            log(f"Service grab lỗi ({e}) — tạm quay về chụp trực tiếp")
     return grab_jpeg(mon, scale, quality)
 
 
@@ -577,7 +577,7 @@ def _ensure_capturer(monitor: int) -> None:
             try:
                 _capturer.stop()
             except Exception as exc:
-                log("capturer.stop() lỗi: %s" % exc)
+                log(f"capturer.stop() lỗi: {exc}")
             _capturer = None
         cap = make_capturer(prefer_dxgi=True)
         try:
@@ -586,7 +586,7 @@ def _ensure_capturer(monitor: int) -> None:
             _capturer_monitor = monitor
             log("Capturer '%s' đã bắt đầu (monitor=%d)" % (cap.name, monitor))
         except Exception as exc:
-            log("Capturer '%s' start lỗi (%s) → fallback MSS" % (cap.name, exc))
+            log(f"Capturer '{cap.name}' start lỗi ({exc}) → fallback MSS")
             # Fallback tường minh về MSS
             from capture.mss_capturer import MssCapturer
             fallback = MssCapturer()
@@ -638,7 +638,6 @@ async def stream_loop():
     4. Viewer không hỗ trợ tiles: luôn nhận 0x01 toàn khung từ TileEngine.
     """
     global _last_clip_hash
-    import numpy as np
     _heartbeat_interval = 5.0  # giây
     _last_heartbeat = time.monotonic()
 
@@ -744,7 +743,7 @@ async def stream_loop():
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            log("stream_loop lỗi: %s" % e)
+            log(f"stream_loop lỗi: {e}")
             await asyncio.sleep(0.5)
 
 

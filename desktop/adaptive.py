@@ -7,8 +7,7 @@ real network or screen access.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, Optional
+from dataclasses import dataclass
 
 
 @dataclass
@@ -47,7 +46,7 @@ class AdaptiveController:
     def _clamp(self, value: int, minimum: int, maximum: int) -> int:
         return max(minimum, min(maximum, value))
 
-    def _next_step(self, rtt_ms: float, dropped_ratio: float, queue_depth: int) -> Dict[str, int]:
+    def _next_step(self, rtt_ms: float, dropped_ratio: float, queue_depth: int) -> dict[str, int]:
         """Return a target profile without mutating the controller state."""
         target_fps = self.fps
         target_quality = self.quality
@@ -76,7 +75,7 @@ class AdaptiveController:
             "scale": self._clamp(target_scale, self.min_scale, self.max_scale),
         }
 
-    def update(self, rtt_ms: float, dropped_ratio: float, queue_depth: int) -> Dict[str, int]:
+    def update(self, rtt_ms: float, dropped_ratio: float, queue_depth: int) -> dict[str, int]:
         """Compute the next auto tuning values and store the latest metrics."""
         self.rtt_ms = float(rtt_ms)
         self.dropped_ratio = float(dropped_ratio)
@@ -87,23 +86,17 @@ class AdaptiveController:
 
         target = self._next_step(self.rtt_ms, self.dropped_ratio, self.queue_depth)
         # Hysteresis: avoid oscillating near the boundary.
-        if target["quality"] > self.quality and self.rtt_ms < 70 and self.dropped_ratio < 0.05:
-            self.quality = target["quality"]
-        elif target["quality"] < self.quality and (self.rtt_ms > 90 or self.dropped_ratio > 0.1 or self.queue_depth > 5):
+        if target["quality"] > self.quality and self.rtt_ms < 70 and self.dropped_ratio < 0.05 or target["quality"] < self.quality and (self.rtt_ms > 90 or self.dropped_ratio > 0.1 or self.queue_depth > 5):
             self.quality = target["quality"]
         else:
             self.quality = max(self.min_quality, min(self.max_quality, self.quality))
 
-        if target["fps"] > self.fps and self.rtt_ms < 60 and self.dropped_ratio < 0.04 and self.queue_depth < 3:
-            self.fps = target["fps"]
-        elif target["fps"] < self.fps and (self.rtt_ms > 100 or self.dropped_ratio > 0.08 or self.queue_depth > 6):
+        if target["fps"] > self.fps and self.rtt_ms < 60 and self.dropped_ratio < 0.04 and self.queue_depth < 3 or target["fps"] < self.fps and (self.rtt_ms > 100 or self.dropped_ratio > 0.08 or self.queue_depth > 6):
             self.fps = target["fps"]
         else:
             self.fps = max(self.min_fps, min(self.max_fps, self.fps))
 
-        if target["scale"] > self.scale and self.rtt_ms < 70 and self.dropped_ratio < 0.06:
-            self.scale = target["scale"]
-        elif target["scale"] < self.scale and (self.rtt_ms > 120 or self.dropped_ratio > 0.12 or self.queue_depth > 8):
+        if target["scale"] > self.scale and self.rtt_ms < 70 and self.dropped_ratio < 0.06 or target["scale"] < self.scale and (self.rtt_ms > 120 or self.dropped_ratio > 0.12 or self.queue_depth > 8):
             self.scale = target["scale"]
         else:
             self.scale = max(self.min_scale, min(self.max_scale, self.scale))
@@ -113,7 +106,7 @@ class AdaptiveController:
     def set_mode(self, mode: str):
         self.mode = "auto" if mode == "auto" else "fixed"
 
-    def state(self) -> Dict[str, object]:
+    def state(self) -> dict[str, object]:
         return {
             "mode": self.mode,
             "fps": self.fps,

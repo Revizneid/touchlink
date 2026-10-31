@@ -9,6 +9,20 @@ description = "Secure desktop-to-mobile remote control platform"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "TouchLink" }]
+dependencies = [
+    "aiohttp>=3.9",
+    "mss>=9.0",
+    "Pillow>=10.0",
+    "pyperclip>=1.8",
+    "qrcode[pil]>=7.4",
+    "cryptography>=42.0",
+    "numpy>=1.24",
+    "pywin32>=306; platform_system == 'Windows'",
+    "dxcam==0.0.5; platform_system == 'Windows'",
+]
+
+[project.scripts]
+touchlink = "desktop.main:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

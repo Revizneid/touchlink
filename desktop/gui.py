@@ -7,16 +7,15 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-import qrcode
-from PIL import ImageTk
-
-import config as cfgmod
 import capture
+import config as cfgmod
 import core
 import overlay as overlay_mod
+import qrcode
 import relay_client
 import secure
-from util import build_urls, lan_ips, password_plain
+from PIL import ImageTk
+from util import build_urls, password_plain
 
 C = {
     "bg":    "#071426",
@@ -51,7 +50,7 @@ class TouchLinkGUI(tk.Tk):
         super().__init__()
         self.cfg = cfg
         self.events_q = events_q
-        self.title("TouchLink v%s — Điều khiển máy tính từ điện thoại" % cfgmod.VERSION)
+        self.title(f"TouchLink v{cfgmod.VERSION} — Điều khiển máy tính từ điện thoại")
         self.geometry("1120x730")
         self.minsize(960, 660)
         self.configure(bg=C["bg"])
@@ -75,7 +74,7 @@ class TouchLinkGUI(tk.Tk):
         self.after(250, self._poll)
         self.show_page("dash")
         self._refresh_svc_status()
-        core.log("TouchLink v%s sẵn sàng." % cfgmod.VERSION)
+        core.log(f"TouchLink v{cfgmod.VERSION} sẵn sàng.")
 
     # ---------- styling ----------
     def _style(self):
@@ -166,7 +165,7 @@ class TouchLinkGUI(tk.Tk):
         badge.pack(side="left", padx=(14, 10), pady=10)
         tk.Label(bar, text="TouchLink", font=(F, 13, "bold"), fg=C["text"],
                  bg=C["side"]).pack(side="left")
-        tk.Label(bar, text="v%s" % cfgmod.VERSION, font=(F, 9), fg=C["dim"],
+        tk.Label(bar, text=f"v{cfgmod.VERSION}", font=(F, 9), fg=C["dim"],
                  bg=C["side"]).pack(side="left", padx=(8, 0))
         self.hdr_dot = self.dot(bar, C["warn"])
         self.hdr_dot.pack(side="left", padx=(16, 5))
@@ -195,7 +194,7 @@ class TouchLinkGUI(tk.Tk):
         side.pack_propagate(False)
         self._nav_btns = {}
         for key, icon, label in NAV:
-            b = tk.Label(side, text="  %s   %s" % (icon, label), font=(F, 10),
+            b = tk.Label(side, text=f"  {icon}   {label}", font=(F, 10),
                          fg=C["dim"], bg=C["side"], anchor="w", pady=11, cursor="hand2")
             b.pack(fill="x", padx=10, pady=3)
             b.bind("<Button-1>", lambda e, k=key: self.show_page(k))
@@ -204,10 +203,10 @@ class TouchLinkGUI(tk.Tk):
             b.page_key = key
             self._nav_btns[key] = b
         tk.Frame(side, bg=C["line"], height=1).pack(fill="x", padx=10, pady=8)
-        tk.Label(side, text="%s (máy này)" % os.environ.get("COMPUTERNAME", "PC"),
+        tk.Label(side, text="{} (máy này)".format(os.environ.get("COMPUTERNAME", "PC")),
                  font=(F, 9), fg=C["dim"], bg=C["side"], anchor="w").pack(
             fill="x", padx=14, pady=4)
-        tk.Label(side, text="ID: %s" % self.cfg.get("device_id", "—"), font=(MONO, 9),
+        tk.Label(side, text="ID: {}".format(self.cfg.get("device_id", "—")), font=(MONO, 9),
                  fg=C["acc"], bg=C["side"], anchor="w").pack(fill="x", padx=14, pady=(0, 6))
         credit = tk.Label(side, text="© Revizneid · github.com/\nRevizneid/touchlink",
                           font=(F, 8), fg=C["dim"], bg=C["side"], anchor="w",
@@ -429,7 +428,7 @@ class TouchLinkGUI(tk.Tk):
             self._qr_img = ImageTk.PhotoImage(img)
             self.qr_lbl.configure(image=self._qr_img)
         except Exception as e:
-            self.toast("QR lỗi: %s" % e, "err")
+            self.toast(f"QR lỗi: {e}", "err")
 
     def _toggle_pw(self):
         self.show_pw.set(not self.show_pw.get())
@@ -442,10 +441,8 @@ class TouchLinkGUI(tk.Tk):
 
     def _copy_info(self):
         urls = build_urls(self.cfg)
-        txt = ("TouchLink\nID: %s\nMật khẩu: %s\nLAN: %s\n?id=%s\nMobile web: "
-               "https://touchlink.vercel.app" % (
-                   self.var_id.get(), self.var_pw.get(), urls[0],
-                   self.var_id.get()))
+        txt = (f"TouchLink\nID: {self.var_id.get()}\nMật khẩu: {self.var_pw.get()}\nLAN: {urls[0]}\n?id={self.var_id.get()}\nMobile web: "
+               "https://touchlink.vercel.app")
         self.clipboard_clear()
         self.clipboard_append(txt)
         self.toast("Đã sao chép thông tin kết nối", "ok")
@@ -476,17 +473,17 @@ class TouchLinkGUI(tk.Tk):
             except Exception:
                 pass
             core.broadcast_event("settings", dict(core.settings))
-            core.log("Đã áp dụng cài đặt: fps=%s quality=%s scale=%s monitor=%s keep_awake=%s" % (
+            core.log("Đã áp dụng cài đặt: fps={} quality={} scale={} monitor={} keep_awake={}".format(
                 core.settings["fps"], core.settings["quality"],
                 core.settings["scale"], core.settings["monitor"],
                 core.settings["keep_awake"]))
             core.broadcast_event("history", ("setting",
-                "Áp dụng: fps=%s, quality=%s, monitor=%s, ngăn sleep=%s" % (
+                "Áp dụng: fps={}, quality={}, monitor={}, ngăn sleep={}".format(
                     core.settings["fps"], core.settings["quality"],
                     core.settings["monitor"], core.settings["keep_awake"])))
             self.toast("Đã áp dụng cài đặt", "ok")
         except Exception as e:
-            self.toast("Cài đặt lỗi: %s" % e, "err")
+            self.toast(f"Cài đặt lỗi: {e}", "err")
 
     def _disconnect_all_viewers(self):
         """Ngắt toàn bộ viewer — gọi từ overlay hoặc hotkey."""
@@ -511,10 +508,9 @@ class TouchLinkGUI(tk.Tk):
         self.cfg["relay_enabled"] = bool(self.var_relay_on.get())
         cfgmod.save(self.cfg)
         url = self.cfg["relay_url"]
-        if self.cfg["relay_enabled"]:
-            if not url.lower().startswith(("ws://", "wss://")):
-                self.toast("URL relay phải bắt đầu bằng ws:// hoặc wss://", "err")
-                return
+        if self.cfg["relay_enabled"] and not url.lower().startswith(("ws://", "wss://")):
+            self.toast("URL relay phải bắt đầu bằng ws:// hoặc wss://", "err")
+            return
         loop = core.get_loop()
         if loop and loop.is_running():
             try:
@@ -528,7 +524,7 @@ class TouchLinkGUI(tk.Tk):
                         relay_client.relay_client.stop(), loop)
                     self.toast("Đã tắt relay", "ok")
             except Exception as e:
-                self.toast("Relay lỗi: %s" % e, "err")
+                self.toast(f"Relay lỗi: {e}", "err")
 
     def _clear_log(self):
         self.txt_log.configure(state="normal")
@@ -562,10 +558,11 @@ class TouchLinkGUI(tk.Tk):
 
     def _preview_worker(self):
         import io
+
         from PIL import Image
         while self._prev_running:
             try:
-                jpeg, m = __import__("capture").grab_jpeg(
+                jpeg, _m = __import__("capture").grab_jpeg(
                     int(core.settings["monitor"]), 40, 55)
                 self._prev_pil = Image.open(io.BytesIO(jpeg))
             except Exception:
@@ -630,7 +627,7 @@ class TouchLinkGUI(tk.Tk):
                  font=(F, 9), fg=C["dim"], bg=C["card"]).pack(anchor="w")
         grid = tk.Frame(box, bg=C["card"])
         grid.pack(fill="x", pady=10)
-        info = ("Máy: %s\nID: %s\nPhiên bản: v%s\nLAN: %s\nRelay: %s" % (
+        info = ("Máy: {}\nID: {}\nPhiên bản: v{}\nLAN: {}\nRelay: {}".format(
             os.environ.get("COMPUTERNAME", "PC"), self.cfg.get("device_id", "—"),
             cfgmod.VERSION, ", ".join(build_urls(self.cfg)),
             self.cfg.get("relay_url", "—")))
@@ -657,7 +654,7 @@ class TouchLinkGUI(tk.Tk):
         conns = core.clients_snapshot()
         if conns:
             self.lbl_viewers.configure(text="\n".join(
-                "• %s  (từ %s)" % (n, s) for n, s in conns), fg=C["text"])
+                f"• {n}  (từ {s})" for n, s in conns), fg=C["text"])
         else:
             self.lbl_viewers.configure(
                 text="Không có ai đang xem.\nMở https://touchlink.vercel.app trên "
@@ -688,9 +685,9 @@ class TouchLinkGUI(tk.Tk):
                  "hóa, cổng, relay). Xóa file này = sinh lại ID/mật khẩu mới.",
                  font=(F, 9), fg=C["dim"], bg=C["card"], justify="left",
                  wraplength=760).pack(anchor="w", pady=(10, 0))
-        tk.Label(box, text="TouchLink v%s — mã nguồn: "
+        tk.Label(box, text=f"TouchLink v{cfgmod.VERSION} — mã nguồn: "
                  "github.com/Revizneid/touchlink — mobile web: "
-                 "touchlink.vercel.app" % cfgmod.VERSION,
+                 "touchlink.vercel.app",
                  font=(F, 9), fg=C["dim"], bg=C["card"]).pack(anchor="w", pady=(12, 0))
         if core.settings.get("_safe_test"):
             tk.Label(box, text="⚠ Đang chạy SAFE-TEST: thao tác điều khiển KHÔNG được "
@@ -699,7 +696,7 @@ class TouchLinkGUI(tk.Tk):
         tk.Frame(box, bg=C["line"], height=1).pack(fill="x", pady=(14, 10))
         tk.Label(box, text="💡 Credit", font=(F, 10, "bold"), fg=C["text"],
                  bg=C["card"]).pack(anchor="w")
-        tk.Label(box, text="TouchLink v%s — phát triển bởi Revizneid" % cfgmod.VERSION,
+        tk.Label(box, text=f"TouchLink v{cfgmod.VERSION} — phát triển bởi Revizneid",
                  font=(F, 9), fg=C["dim"], bg=C["card"]).pack(anchor="w", pady=(4, 2))
         links = tk.Frame(box, bg=C["card"])
         links.pack(anchor="w")
@@ -782,7 +779,7 @@ class TouchLinkGUI(tk.Tk):
     def _show_svc(self, info):
         if info and info.get("ok"):
             self.lbl_svc.configure(
-                text="Service: đang chạy — máy khóa: %s%s" % (
+                text="Service: đang chạy — máy khóa: {}{}".format(
                     "có" if info.get("locked") else "không",
                     "  (safe-test)" if info.get("safe") else ""),
                 fg=C["ok"])
@@ -803,42 +800,42 @@ class TouchLinkGUI(tk.Tk):
     def _install_svc(self):
         exe = self._svc_exe_hint()
         if exe:
-            cmd = '"%s" install && net start TouchLinkSvc' % exe
+            cmd = f'"{exe}" install && net start TouchLinkSvc'
         else:
             py = os.path.join(cfgmod.ROOT_DIR, ".venv", "Scripts", "python.exe")
             script = os.path.join(cfgmod.APP_DIR, "svc_main.py")
             if not os.path.exists(py):
                 self.toast("Không tìm thấy TouchLinkSvc.exe — hãy build trước", "err")
                 return
-            cmd = '"%s" "%s" install && net start TouchLinkSvc' % (py, script)
+            cmd = f'"{py}" "{script}" install && net start TouchLinkSvc'
         try:
             ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe",
                                                 "/c " + cmd, None, 1)
             self.toast("Đang cài service — bấm Yes trong cửa sổ UAC", "warn")
             self.after(8000, self._refresh_svc_status)
         except Exception as e:
-            self.toast("Không mở được UAC: %s" % e, "err")
+            self.toast(f"Không mở được UAC: {e}", "err")
 
     def _remove_svc(self):
         exe = self._svc_exe_hint()
-        svc_ref = '"%s"' % exe if exe else '"%s" "%s"' % (
+        svc_ref = f'"{exe}"' if exe else '"{}" "{}"'.format(
             os.path.join(cfgmod.ROOT_DIR, ".venv", "Scripts", "python.exe"),
             os.path.join(cfgmod.APP_DIR, "svc_main.py"))
         try:
             ctypes.windll.shell32.ShellExecuteW(
                 None, "runas", "cmd.exe",
-                "/c net stop TouchLinkSvc & %s remove" % svc_ref, None, 1)
+                f"/c net stop TouchLinkSvc & {svc_ref} remove", None, 1)
             self.toast("Đang gỡ service…", "warn")
             self.after(8000, self._refresh_svc_status)
         except Exception as e:
-            self.toast("Không mở được UAC: %s" % e, "err")
+            self.toast(f"Không mở được UAC: {e}", "err")
 
     def _open_link(self, url):
         try:
             import webbrowser
             webbrowser.open(url)
         except Exception as e:
-            self.toast("Không mở được liên kết: %s" % e, "err")
+            self.toast(f"Không mở được liên kết: {e}", "err")
 
     def _save_port(self):
         try:
@@ -864,7 +861,7 @@ class TouchLinkGUI(tk.Tk):
         try:
             os.startfile(cfgmod.BASE_DIR)  # noqa: chỉ Windows
         except Exception as e:
-            self.toast("Không mở được thư mục: %s" % e, "err")
+            self.toast(f"Không mở được thư mục: {e}", "err")
 
     # ---------- status badges ----------
     def _update_status_badges(self):
@@ -874,7 +871,7 @@ class TouchLinkGUI(tk.Tk):
             self.slbls[key].configure(text=label)
 
         if self.server_running:
-            set_badge("server", C["ok"], "Server LAN :%s" % self.cfg.get("port"))
+            set_badge("server", C["ok"], "Server LAN :{}".format(self.cfg.get("port")))
         else:
             set_badge("server", C["err"], "Server lỗi")
         relay_map = {
@@ -923,7 +920,7 @@ class TouchLinkGUI(tk.Tk):
                 if kind == "log":
                     tag = self._classify(str(data))
                     self.txt_log.configure(state="normal")
-                    self.txt_log.insert("end", "[%s] " % time.strftime("%H:%M:%S"),
+                    self.txt_log.insert("end", "[{}] ".format(time.strftime("%H:%M:%S")),
                                         "time")
                     self.txt_log.insert("end", str(data) + "\n", tag)
                     if int(self.txt_log.index("end-1c").split(".")[0]) > 500:
@@ -947,7 +944,7 @@ class TouchLinkGUI(tk.Tk):
                     self.server_running = bool(data)
                     self._update_status_badges()
                 elif kind == "chat":
-                    self.toast("💬 %s: %s" % data)
+                    self.toast("💬 {}: {}".format(*data))
                 elif kind == "history":
                     self._hist_add_row(data)
                 elif kind == "svc":

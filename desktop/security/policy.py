@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 
 def evaluate_connection_policy(
@@ -13,7 +13,7 @@ def evaluate_connection_policy(
     active_user: bool,
     device_name: str | None = None,
     permission: str | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Decide whether a connection should be allowed, denied, or require consent.
 
     The policy is intentionally conservative and compatible with the Sprint 2.3 plan:

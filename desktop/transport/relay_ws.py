@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from .base import Transport
 
@@ -27,7 +27,7 @@ class RelayWsTransport(Transport):
             self._data_callback(message)
         return {"transport": self.name, "sent": message}
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         return {"transport": self.name, "started": self.started, "sent_count": len(self._sent)}
 
     def close(self) -> None:

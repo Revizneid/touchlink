@@ -13,11 +13,9 @@ import json
 import random
 
 import aiohttp
-from aiohttp import WSMsgType
-
 import core
-from protocol import PROTOCOL_VERSION, CAPS, HELLO_TIMEOUT
-
+from aiohttp import WSMsgType
+from protocol import CAPS, PROTOCOL_VERSION
 
 # Thứ tự backoff (giây): 1, 2, 4, 8, 15, 30
 _BACKOFF_BASE = 1
@@ -61,7 +59,7 @@ class RelayClient:
             return
         self.running = True
         self._set_status("connecting")
-        core.log("Relay: đang kết nối tới %s" % cfg.get("relay_url"))
+        core.log("Relay: đang kết nối tới {}".format(cfg.get("relay_url")))
         self.task = asyncio.create_task(self._run(cfg))
 
     async def stop(self) -> None:
@@ -70,7 +68,7 @@ class RelayClient:
             self.task.cancel()
             try:
                 await self.task
-            except Exception:
+            except asyncio.CancelledError:
                 pass
             self.task = None
         await self._cleanup()
@@ -84,13 +82,13 @@ class RelayClient:
         if self.ws:
             try:
                 await self.ws.close()
-            except Exception:
+            except (ConnectionError, OSError):
                 pass
             self.ws = None
         if self.session:
             try:
                 await self.session.close()
-            except Exception:
+            except (ConnectionError, OSError):
                 pass
             self.session = None
         # Không set stopped ở đây — _run() quyết định trạng thái tiếp theo
@@ -127,9 +125,9 @@ class RelayClient:
 
                 backoff = float(_BACKOFF_BASE)
                 self._last_err = None
-                core.log("Relay: đã đăng ký mã máy %s" % cfg.get("device_id"))
+                core.log("Relay: đã đăng ký mã máy {}".format(cfg.get("device_id")))
                 self._set_status("registered",
-                                 "Đã đăng ký mã máy %s trên relay" % cfg.get("device_id"))
+                                 "Đã đăng ký mã máy {} trên relay".format(cfg.get("device_id")))
 
                 # Vòng lặp nhận message
                 async for msg in self.ws:
@@ -139,18 +137,18 @@ class RelayClient:
                         if self.conn:
                             try:
                                 await self.conn.send_bytes(msg.data)
-                            except Exception:
+                            except ConnectionError:
                                 pass
                     elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                         break
 
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError, OSError, RuntimeError, ValueError) as e:
                 err = str(e)
                 if err != self._last_err:
                     self._last_err = err
-                    core.log("Relay: mất kết nối (%s)" % err)
+                    core.log(f"Relay: mất kết nối ({err})")
             finally:
                 await self._cleanup()
 
@@ -160,8 +158,8 @@ class RelayClient:
             delay = self._retry_delay if self._retry_delay is not None else backoff
             self._retry_delay = None
             self._set_status("retrying",
-                             "Relay: thử lại sau %.0fs" % delay)
-            core.log("Relay: thử lại sau %.1fs" % delay)
+                             f"Relay: thử lại sau {delay:.0f}s")
+            core.log(f"Relay: thử lại sau {delay:.1f}s")
             await asyncio.sleep(delay)
             backoff = _next_backoff(backoff)
 
@@ -185,18 +183,15 @@ class RelayClient:
                 if inner.get("type") == "hello":
                     self.conn.peer_v = int(inner.get("v") or 1)
                     self.conn.peer_caps = list(inner.get("caps") or [])
-                    core.log(
-                        "Relay viewer hello: v=%d caps=%s"
-                        % (self.conn.peer_v, self.conn.peer_caps)
-                    )
+                    core.log(f"Relay viewer hello: v={self.conn.peer_v} caps={self.conn.peer_caps}")
                 else:
                     asyncio.create_task(core.handle_client_message(self.conn, inner))
         elif t == "error":
             msg_text = str(data.get("message", "?"))
             if msg_text != self._last_err:
                 self._last_err = msg_text
-                core.log("Relay: %s" % msg_text)
-                core.broadcast_event("history", ("relay", "Lỗi: %s" % msg_text))
+                core.log(f"Relay: {msg_text}")
+                core.broadcast_event("history", ("relay", f"Lỗi: {msg_text}"))
             self._set_status("error")
             if "đã đăng ký" in msg_text or "đã có máy khác" in msg_text:
                 self._retry_delay = 60.0
@@ -225,8 +220,8 @@ class RelayClient:
                 cfg=cfg,
                 headless=headless,
             )
-        except Exception as e:
-            core.log("Consent lỗi (%s) → cho phép" % e)
+        except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError) as e:
+            core.log(f"Consent lỗi ({e}) → cho phép")
             result = "allow"
 
         if result == "deny":
@@ -237,7 +232,7 @@ class RelayClient:
 
         # Tạo kết nối viewer
         conn = core.ClientConn(
-            name="Relay viewer (%s)" % viewer_ip,
+            name=f"Relay viewer ({viewer_ip})",
             send_json=lambda d: self._to_viewer_json(d),
             send_bytes=lambda b: self._to_viewer_bytes(b),
             close=lambda: self._unbind(),
@@ -274,7 +269,7 @@ class RelayClient:
         if self.ws and not self.ws.closed:
             try:
                 await self.ws.send_json({"type": "unbind"})
-            except Exception:
+            except (ConnectionError, OSError):
                 pass
 
 

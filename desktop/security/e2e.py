@@ -18,7 +18,7 @@ import hmac
 import secrets
 import struct
 import time
-from typing import Any, Optional
+from typing import Any
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
@@ -26,7 +26,6 @@ from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-
 
 MAX_E2E_MESSAGE_SIZE = 1 * 1024 * 1024
 
@@ -43,12 +42,12 @@ def _coerce_bytes(value: Any, *, name: str) -> bytes:
     if hasattr(value, "public_bytes"):
         try:
             return value.public_bytes_raw()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
     if hasattr(value, "private_bytes"):
         try:
             return value.private_bytes_raw()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
     return bytes(value)
 
@@ -61,13 +60,13 @@ def _to_public_bytes(public_key: Any) -> bytes:
     if hasattr(public_key, "public_bytes"):
         try:
             return public_key.public_bytes_raw()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             try:
                 return public_key.public_bytes(
                     encoding=__import__("cryptography.hazmat.primitives.serialization", fromlist=["Encoding"]).Encoding.Raw,
                     format=__import__("cryptography.hazmat.primitives.serialization", fromlist=["PublicFormat"]).PublicFormat.Raw,
                 )
-            except Exception:
+            except (TypeError, ValueError, AttributeError):
                 pass
     if hasattr(public_key, "public_bytes_raw"):
         return public_key.public_bytes_raw()
@@ -82,13 +81,13 @@ def _to_private_bytes(private_key: Any) -> bytes:
     if hasattr(private_key, "private_bytes"):
         try:
             return private_key.private_bytes_raw()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
     if hasattr(private_key, "private_bytes"):
         try:
-            from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
+            from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
             return private_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
     raise TypeError("Unsupported private key type")
 
@@ -112,9 +111,8 @@ def _coerce_x25519_public(public_key: Any) -> x25519.X25519PublicKey:
         raw = _to_public_bytes(public_key)
         seed = hashlib.sha256(b"touchlink-x25519-compat:" + raw).digest()
         return x25519.X25519PublicKey.from_public_bytes(seed)
-    if isinstance(public_key, (bytes, bytearray)):
-        if len(public_key) == 32:
-            return x25519.X25519PublicKey.from_public_bytes(bytes(public_key))
+    if isinstance(public_key, (bytes, bytearray)) and len(public_key) == 32:
+        return x25519.X25519PublicKey.from_public_bytes(bytes(public_key))
     raise TypeError("Expected X25519 or Ed25519 public key")
 
 
@@ -131,7 +129,7 @@ def verify_ed25519_signature(public_key: Any, message: Any, signature: bytes) ->
                 return False
         public_key.verify(sig, msg)
         return True
-    except Exception:
+    except (TypeError, ValueError):
         return False
 
 
@@ -154,12 +152,12 @@ class OneTimePasscode:
     DEFAULT_LENGTH = 10
     DEFAULT_TTL_SECONDS = 600
 
-    def __init__(self, issue_time: Optional[float] = None, ttl_seconds: int = DEFAULT_TTL_SECONDS):
+    def __init__(self, issue_time: float | None = None, ttl_seconds: int = DEFAULT_TTL_SECONDS):
         self.issue_time = float(issue_time) if issue_time is not None else time.time()
         if self.issue_time == 0:
             self.issue_time = time.time()
         self.ttl_seconds = max(1, int(ttl_seconds))
-        self._current: Optional[str] = None
+        self._current: str | None = None
         self._used = False
 
     @classmethod
@@ -235,7 +233,7 @@ class E2EChannel:
             shared = local_x.exchange(remote_x)
             material = b"touchlink-e2e-v1" + shared + self.transcript
             return hashlib.sha256(material).digest()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             local_pub = local_priv.public_key() if hasattr(local_priv, "public_key") else local_priv
             remote_raw = _to_public_bytes(remote_pub)
             local_raw = _to_public_bytes(local_pub)

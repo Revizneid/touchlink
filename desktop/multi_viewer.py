@@ -8,9 +8,9 @@ This module keeps the controller/viewer authorization model explicit and fail-cl
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional
-
+from typing import Any
 
 DEFAULT_MACRO_ALLOWLIST = {"type", "key", "combo"}
 DEFAULT_PROHIBITED = {"ctrl+alt+delete", "alt+tab", "win+l", "win+d", "win+r"}
@@ -37,9 +37,7 @@ class MacroPolicy:
             return True
         if normalized.startswith("key:"):
             return True
-        if normalized.startswith("combo:"):
-            return True
-        return False
+        return bool(normalized.startswith("combo:"))
 
 
 def default_macro_policy() -> MacroPolicy:
@@ -52,7 +50,7 @@ def evaluate_macro(policy: MacroPolicy | None, action: str) -> bool:
     return bool(policy.allows(action))
 
 
-def resolve_controller(viewers: Iterable[Dict[str, Any]]) -> Optional[str]:
+def resolve_controller(viewers: Iterable[dict[str, Any]]) -> str | None:
     ordered = list(viewers or [])
     if not ordered:
         return None
@@ -65,10 +63,10 @@ def resolve_controller(viewers: Iterable[Dict[str, Any]]) -> Optional[str]:
 class MultiViewerSession:
     """Very small session manager for controller + viewer topology."""
 
-    def __init__(self, *, max_viewers: int = 4, controller: Optional[str] = None):
+    def __init__(self, *, max_viewers: int = 4, controller: str | None = None):
         self.max_viewers = max(1, int(max_viewers))
         self.controller = controller
-        self.viewers: List[Dict[str, Any]] = []
+        self.viewers: list[dict[str, Any]] = []
 
     def register_viewer(self, viewer_id: str, *, role: str = "viewer") -> bool:
         if self.can_register(viewer_id):
@@ -83,9 +81,7 @@ class MultiViewerSession:
             return False
         if len(self.viewers) >= self.max_viewers:
             return False
-        if any(str(v.get("id")) == str(viewer_id) for v in self.viewers):
-            return False
-        return True
+        return not any(str(v.get("id")) == str(viewer_id) for v in self.viewers)
 
     def set_controller(self, viewer_id: str) -> bool:
         if not viewer_id or not any(str(v.get("id")) == str(viewer_id) for v in self.viewers):

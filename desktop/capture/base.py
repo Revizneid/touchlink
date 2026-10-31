@@ -4,7 +4,7 @@ Không import bất kỳ thư viện capture cụ thể nào tại đây.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 
@@ -17,7 +17,7 @@ class Rect:
     w: int
     h: int
 
-    def union(self, other: "Rect") -> "Rect":
+    def union(self, other: Rect) -> Rect:
         """Gộp hai rect thành rect bao ngoài."""
         x1 = min(self.x, other.x)
         y1 = min(self.y, other.y)

@@ -6,8 +6,6 @@ Android Chrome when the web client is used as a PWA.
 
 from __future__ import annotations
 
-from typing import Dict
-
 
 def detect_browser_family(user_agent: str | None) -> str:
     """Return a coarse browser family: desktop, ios, android, mobile, unknown."""
@@ -23,7 +21,7 @@ def detect_browser_family(user_agent: str | None) -> str:
     return "desktop"
 
 
-def build_mobile_viewport_policy(user_agent: str | None) -> Dict[str, object]:
+def build_mobile_viewport_policy(user_agent: str | None) -> dict[str, object]:
     """Return a normalized compatibility profile for browser runtime behavior."""
     family = detect_browser_family(user_agent)
     if family == "ios":

@@ -12,11 +12,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import os
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -94,8 +93,8 @@ class PairingSession:
         self.device_id = str(device_id)
         self.device_name = str(device_name)
         self.relay_url = relay_url or ""
-        self._secrets: Dict[str, Dict[str, Any]] = {}
-        self._failures: Dict[str, int] = {}
+        self._secrets: dict[str, dict[str, Any]] = {}
+        self._failures: dict[str, int] = {}
 
     def issue_secret(self, ttl_seconds: int = 120) -> str:
         secret = secrets.token_hex(16)

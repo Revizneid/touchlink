@@ -8,8 +8,8 @@ from .webrtc import (
     resolve_transport_order,
 )
 from .webrtc_signaling import (
-    RTCSignalMessage,
     RTC_SIGNAL_TYPES,
+    RTCSignalMessage,
     create_turn_credential,
     sign_sdp,
     validate_webrtc_signal,
@@ -18,9 +18,9 @@ from .webrtc_signaling import (
 )
 
 __all__ = [
+    "RTC_SIGNAL_TYPES",
     "LanWsTransport",
     "RTCSignalMessage",
-    "RTC_SIGNAL_TYPES",
     "RelayWsTransport",
     "Transport",
     "WebRtcTransport",

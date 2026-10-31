@@ -6,13 +6,11 @@ ctypes-based backend in the input package.
 from __future__ import annotations
 
 from input.sendinput import (
-    InputBackend,
     KEYMAP,
     MODS,
+    InputBackend,
     SafeBackend,
     WindowsSendInputBackend,
-    normalize_absolute_xy,
-    resolve_key,
 )
 
 SAFE_TEST = False

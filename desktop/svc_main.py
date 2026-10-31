@@ -29,6 +29,7 @@ from desktop.security.service_hardening import sanitize_pipe_operation
 PIPE_NAME = r'\\.\pipe\TouchLinkSvc'
 
 import config as _cfg
+
 VERSION = _cfg.VERSION
 
 _win = hasattr(ctypes, "windll")
@@ -106,9 +107,8 @@ class InputWorker(threading.Thread):
                 op = self.q.pop(0)
             try:
                 h = open_input_desktop()
-                if h:
-                    if not u32.SetThreadDesktop(h):
-                        pass  # giữ desktop cũ nếu đổi không được
+                if h and not u32.SetThreadDesktop(h):
+                    pass  # giữ desktop cũ nếu đổi không được
                 kind = op.get("kind")
                 if kind == "mouse":
                     if op.get("rel") is not None:
@@ -120,9 +120,9 @@ class InputWorker(threading.Thread):
                         if x is not None and y is not None and op.get("_geom"):
                             g = op["_geom"]
                             px = g["left"] + max(0, min(g["width"] - 1,
-                                int(round(float(x) * g["width"] / max(1, g["fw"])))))
+                                round(float(x) * g["width"] / max(1, g["fw"]))))
                             py = g["top"] + max(0, min(g["height"] - 1,
-                                int(round(float(y) * g["height"] / max(1, g["fh"])))))
+                                round(float(y) * g["height"] / max(1, g["fh"]))))
                         amount = int(op.get("amount", 0) or 0)
                         hamount = int(op.get("hamount", 0) or 0)
                         if op.get("action") == "scroll":
@@ -167,7 +167,7 @@ def _resp_blob(b):
 def _read_exact(h, n):
     out = b""
     while len(out) < n:
-        hr, data = win32file.ReadFile(h, n - len(out))
+        _hr, data = win32file.ReadFile(h, n - len(out))
         if not data:
             raise ConnectionError("pipe closed")
         out += data
@@ -237,7 +237,7 @@ def serve_pipes(stop_evt, worker, safe_test):
                 win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE
                 | win32pipe.PIPE_WAIT,
                 win32pipe.PIPE_UNLIMITED_INSTANCES, 1024 * 1024, 1024 * 1024, 0, None)
-        except Exception as e:
+        except Exception:
             time.sleep(2)
             continue
         try:
@@ -248,9 +248,9 @@ def serve_pipes(stop_evt, worker, safe_test):
                          daemon=True).start()
 
 
-import pywintypes  # noqa: E402  (dùng ở trên)
-import win32file  # noqa: E402
-import win32pipe  # noqa: E402
+import pywintypes
+import win32file
+import win32pipe
 
 
 def run_server(safe_test=False, log_fn=print):
@@ -261,8 +261,7 @@ def run_server(safe_test=False, log_fn=print):
     stop = threading.Event()
     threading.Thread(target=serve_pipes, args=(stop, worker, safe_test),
                      daemon=True).start()
-    log_fn("TouchLinkSvc pipe server sẵn sàng (safe=%s, locked=%s)"
-           % (safe_test, is_locked()))
+    log_fn(f"TouchLinkSvc pipe server sẵn sàng (safe={safe_test}, locked={is_locked()})")
     return stop
 
 
@@ -275,7 +274,7 @@ def log_file_fn():
     def _log(msg):
         try:
             with open(path, "a", encoding="utf-8") as f:
-                f.write("[%s] %s\n" % (time.strftime("%y-%m-%d %H:%M:%S"), msg))
+                f.write("[{}] {}\n".format(time.strftime("%y-%m-%d %H:%M:%S"), msg))
         except Exception:
             pass
         print(msg, flush=True)
@@ -313,7 +312,6 @@ def run_as_service():
             log("Service khởi động")
             safe = os.environ.get("TOUCHLINK_SAFE_TEST", "") == "1"
             stop = run_server(safe, log)
-            import win32api
             while self.running:
                 rc = win32event.WaitForSingleObject(self.stop_evt, 5000)
                 if rc == win32event.WAIT_OBJECT_0:

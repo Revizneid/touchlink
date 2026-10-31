@@ -15,7 +15,7 @@ import threading
 import time
 from typing import Any
 
-from .base import Capturer, Frame, Rect
+from .base import Frame, Rect
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class DxgiCapturer:
             if self._camera is None:
                 raise RuntimeError("dxcam.create() trả None")
         except Exception as exc:
-            raise RuntimeError("dxcam không khởi tạo được: %s" % exc) from exc
+            raise RuntimeError(f"dxcam không khởi tạo được: {exc}") from exc
 
         self._stop_evt.clear()
         self._thread = threading.Thread(
@@ -93,8 +93,7 @@ class DxgiCapturer:
             time.sleep(0.05)
 
         raise RuntimeError(
-            "DxgiCapturer: không có frame đầu sau %.1fs (RDP/driver/session không hợp lệ)"
-            % self._FIRST_FRAME_TIMEOUT
+            f"DxgiCapturer: không có frame đầu sau {self._FIRST_FRAME_TIMEOUT:.1f}s (RDP/driver/session không hợp lệ)"
         )
 
     def grab(self) -> Frame | None:

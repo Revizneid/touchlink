@@ -12,7 +12,6 @@ PIPE_NAME = r'\\.\pipe\TouchLinkSvc'
 _win = False
 try:
     import win32file
-    import pywintypes
     _win = True
 except Exception:
     _win = False
@@ -64,7 +63,7 @@ def grab(monitor=1, scale=100, quality=60):
     tb, data = request({"op": "grab", "monitor": monitor, "scale": scale,
                         "quality": quality}, timeout_ms=8000)
     if tb != 0x42:
-        raise RuntimeError("grab lỗi: %s" % data[:200])
+        raise RuntimeError(f"grab lỗi: {data[:200]}")
     meta_len = struct.unpack("<I", data[:4])[0]
     meta = json.loads(data[4:4 + meta_len])
     body = data[4 + meta_len:]

@@ -8,8 +8,7 @@ works even when real audio libraries are absent in CI or local developer shells.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
-
+from typing import Any
 
 SUPPORTED_AUDIO_CODECS = {"opus", "aac", "pcm"}
 VALID_SAMPLE_RATES = {32000, 44100, 48000}
@@ -26,11 +25,11 @@ class AudioSessionConfig:
     channels: int = 2
     bitrate_kbps: int = 48
     frame_size: int = 960
-    audio_device: Optional[str] = None
+    audio_device: str | None = None
     permission_required: bool = True
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         payload = {
             "enabled": bool(self.enabled),
             "codec": str(self.codec).lower(),
@@ -47,7 +46,7 @@ class AudioSessionConfig:
         return payload
 
 
-def normalize_audio_config(raw: Dict[str, Any] | AudioSessionConfig | None) -> Dict[str, Any]:
+def normalize_audio_config(raw: dict[str, Any] | AudioSessionConfig | None) -> dict[str, Any]:
     if isinstance(raw, AudioSessionConfig):
         return raw.to_dict()
     if not isinstance(raw, dict):
@@ -66,7 +65,7 @@ def normalize_audio_config(raw: Dict[str, Any] | AudioSessionConfig | None) -> D
     return config
 
 
-def validate_audio_config(config: Dict[str, Any] | AudioSessionConfig | None) -> bool:
+def validate_audio_config(config: dict[str, Any] | AudioSessionConfig | None) -> bool:
     cfg = normalize_audio_config(config)
     if not cfg:
         return False
@@ -86,9 +85,7 @@ def validate_audio_config(config: Dict[str, Any] | AudioSessionConfig | None) ->
     if bitrate < low or bitrate > high:
         return False
     capture_source = str(cfg.get("capture_source", "loopback")).lower()
-    if capture_source not in {"loopback", "system", "default"}:
-        return False
-    return True
+    return capture_source in {"loopback", "system", "default"}
 
 
 def build_loopback_audio_profile(
@@ -97,8 +94,8 @@ def build_loopback_audio_profile(
     channels: int = 2,
     bitrate_kbps: int = 48,
     enabled: bool = True,
-    device: Optional[str] = None,
-) -> Dict[str, Any]:
+    device: str | None = None,
+) -> dict[str, Any]:
     """Return the default loopback audio settings for the desktop agent."""
     profile = {
         "enabled": bool(enabled),
@@ -134,9 +131,9 @@ def build_audio_session_config(**kwargs: Any) -> AudioSessionConfig:
 
 
 __all__ = [
-    "AudioSessionConfig",
     "AUDIO_BITRATE_RANGE",
     "SUPPORTED_AUDIO_CODECS",
+    "AudioSessionConfig",
     "build_audio_session_config",
     "build_loopback_audio_profile",
     "validate_audio_config",

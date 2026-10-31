@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from collections.abc import Iterable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
-
+from typing import Any
 
 DEFAULT_PROJECT_NAME = "TouchLink"
 

@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Mapping
-
+from typing import Any
 
 _SENSITIVE_KEYS = ("password", "secret", "token", "clipboard", "keys", "payload", "pin", "code")
 
@@ -19,9 +18,9 @@ def _mask_ip(ip_value: Any) -> str:
         return "unknown"
     if ":" in value:
         try:
-            left, right = value.split(":", 1)
+            left, _right = value.split(":", 1)
             return f"{left[:2]}**:***" if left else "::1"
-        except Exception:
+        except ValueError:
             return "[redacted]"
     parts = value.split(".")
     if len(parts) == 4:
@@ -31,7 +30,7 @@ def _mask_ip(ip_value: Any) -> str:
 
 def _sanitize_value(value: Any) -> Any:
     if isinstance(value, Mapping):
-        cleaned: Dict[str, Any] = {}
+        cleaned: dict[str, Any] = {}
         for key, inner in value.items():
             lowered = str(key).lower()
             if any(token in lowered for token in _SENSITIVE_KEYS):
@@ -76,8 +75,8 @@ class AuditLogger:
         session_id: str | None = None,
         details: Mapping[str, Any] | None = None,
         **extra: Any,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "event": str(event),
             "device_id": device_id,

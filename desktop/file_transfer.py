@@ -11,9 +11,9 @@ import hashlib
 import math
 import os
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
-
+from typing import Any
 
 DANGEROUS_EXTENSIONS = {
     ".exe",
@@ -52,7 +52,7 @@ def sanitize_file_name(name: str) -> str:
     return base
 
 
-def validate_file_offer(payload: Dict[str, Any] | None) -> bool:
+def validate_file_offer(payload: dict[str, Any] | None) -> bool:
     if not isinstance(payload, dict):
         return False
     transfer_id = str(payload.get("id") or "")
@@ -71,12 +71,10 @@ def validate_file_offer(payload: Dict[str, Any] | None) -> bool:
         sanitize_file_name(name)
     except ValueError:
         return False
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
-        return False
-    return True
+    return re.fullmatch(r"[0-9a-fA-F]{64}", sha256)
 
 
-def build_file_offer(transfer_id: str, file_name: str, file_size: int, sha256_hex: str) -> Dict[str, Any]:
+def build_file_offer(transfer_id: str, file_name: str, file_size: int, sha256_hex: str) -> dict[str, Any]:
     if not validate_file_offer({
         "id": transfer_id,
         "name": file_name,
@@ -126,8 +124,8 @@ class FileTransferSession:
         file_size: int,
         expected_sha256: str,
         destination_dir: str | os.PathLike[str],
-        allowlist: Optional[Sequence[str | os.PathLike[str]]] = None,
-        chunk_size: Optional[int] = None,
+        allowlist: Sequence[str | os.PathLike[str]] | None = None,
+        chunk_size: int | None = None,
         max_total_bytes: int = MAX_FILE_BYTES,
     ):
         self.transfer_id = str(transfer_id)
@@ -138,7 +136,7 @@ class FileTransferSession:
         self.allowlist = list(map(str, allowlist or [self.destination_dir]))
         self.chunk_size = int(chunk_size or max(1, min(DEFAULT_CHUNK_BYTES, max(1, self.file_size // 2))))
         self.max_total_bytes = int(max_total_bytes)
-        self._chunks: Dict[int, bytes] = {}
+        self._chunks: dict[int, bytes] = {}
         self._hash = hashlib.sha256()
         self._received_bytes = 0
         self._complete = False
@@ -155,16 +153,16 @@ class FileTransferSession:
     def is_complete(self) -> bool:
         return self._complete and self._received_bytes == self.file_size and self._hash.hexdigest() == self.expected_sha256
 
-    def accept(self) -> Dict[str, Any]:
+    def accept(self) -> dict[str, Any]:
         return {"type": "file_accept", "id": self.transfer_id}
 
-    def reject(self, reason: str = "rejected") -> Dict[str, Any]:
+    def reject(self, reason: str = "rejected") -> dict[str, Any]:
         return {"type": "file_reject", "id": self.transfer_id, "reason": reason}
 
     def _max_seq(self) -> int:
         if self.file_size <= 0:
             return 0
-        return max(1, int(math.ceil(self.file_size / max(1, self.chunk_size))))
+        return max(1, math.ceil(self.file_size / max(1, self.chunk_size)))
 
     def _safe_chunk(self, seq: int, data: bytes) -> bool:
         if seq < 0 or seq >= self._max_seq():
@@ -174,9 +172,7 @@ class FileTransferSession:
         payload = bytes(data)
         if len(payload) > self.chunk_size:
             return False
-        if self._received_bytes + len(payload) > self.file_size + self.chunk_size:
-            return False
-        return True
+        return not self._received_bytes + len(payload) > self.file_size + self.chunk_size
 
     def receive_chunk(self, seq: int, data: bytes, *, expect_final: bool = False) -> bool:
         if not self._safe_chunk(seq, data):
@@ -203,18 +199,18 @@ class FileTransferSession:
 
         return True
 
-    def build_ack(self, seq: int) -> Dict[str, Any]:
+    def build_ack(self, seq: int) -> dict[str, Any]:
         return {"type": "file_ack", "id": self.transfer_id, "seq": int(seq)}
 
-    def build_done(self) -> Dict[str, Any]:
+    def build_done(self) -> dict[str, Any]:
         return {"type": "file_done", "id": self.transfer_id, "sha256": self.expected_sha256, "complete": self.is_complete}
 
 
 __all__ = [
-    "DEFAULT_CHUNK_BYTES",
     "DANGEROUS_EXTENSIONS",
-    "FileTransferSession",
+    "DEFAULT_CHUNK_BYTES",
     "MAX_FILE_BYTES",
+    "FileTransferSession",
     "build_file_offer",
     "is_valid_destination",
     "sanitize_file_name",

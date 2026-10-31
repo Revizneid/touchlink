@@ -5,12 +5,10 @@ DPAPI gắn với user + máy, chỉ tiến trình của chính user này giải
 import base64
 import ctypes
 import hashlib
-import hmac
 import os
 import time
-from threading import Lock
-
 from ctypes import wintypes
+from threading import Lock
 
 
 class DATA_BLOB(ctypes.Structure):
@@ -37,7 +35,7 @@ def protect(data: str) -> str:
         raw = ctypes.string_at(out.pbData, out.cbData)
         _free(out)
         return base64.b64encode(raw).decode("ascii")
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return "plain:" + data
 
 
@@ -57,7 +55,7 @@ def unprotect(enc: str):
         data = ctypes.string_at(out.pbData, out.cbData).decode("utf-8")
         _free(out)
         return data
-    except Exception:
+    except (TypeError, ValueError, OSError):
         return None
 
 

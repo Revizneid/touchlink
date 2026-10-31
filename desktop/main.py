@@ -1,30 +1,28 @@
 """TouchLink — điều khiển máy tính từ điện thoại.
 
-Chạy:  python main.py [--headless] [--safe-test] [--port N] [--password MK] ...
+Chạy:  python -m desktop.main [--headless] [--safe-test] [--port N] [--password MK] ...
 """
 import argparse
 import asyncio
 import ctypes
+import json
 import os
 import queue
 import sys
 import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import aiohttp
-from aiohttp import web
-
 import config as cfgmod
-import capture
 import core
-import overlay as overlay_mod
-import secure
-import util
-from auth import RateLimiter
 import input_control as inp
 import relay_client
+import secure
 import server as server_mod
+import util
+from aiohttp import web
+from auth import RateLimiter
 
 
 def set_dpi_aware():
@@ -53,6 +51,12 @@ def parse_args():
     p.add_argument("--no-relay", action="store_true", help="Tắt kết nối relay")
     p.add_argument("--reset", action="store_true", help="Sinh lại mã máy + mật khẩu")
     p.add_argument("--version", action="store_true")
+    p.add_argument("--doctor", action="store_true", help="In báo cáo khởi động và kiểm tra môi trường")
+    p.add_argument("--json", action="store_true", help="Xuất JSON khi dùng --doctor")
+    p.add_argument("--exit-after", type=float, default=None, metavar="SECONDS",
+                   help="Thoát sau N giây kể từ khi server sẵn sàng")
+    p.add_argument("--print-ready", action="store_true",
+                   help="In ra dấu READY khi server đã sẵn sàng")
     return p.parse_args()
 
 
@@ -70,7 +74,7 @@ def prepare_config(args):
         cfg["password_enc"] = secure.protect(pw)
         changed = True
         if args.headless:
-            print("Mật khẩu mới: %s" % pw)
+            print(f"Mật khẩu mới: {pw}")
     for key, val in (("port", args.port), ("relay_url", args.relay_url)):
         if val is not None:
             cfg[key] = val
@@ -120,14 +124,14 @@ async def async_main(cfg, events_q, started_evt):
         core.log("Cổng %d đang bận (có thể TouchLink đang chạy) → tự dùng cổng %d"
                  % (base_port, port))
     cfg["port"] = port  # chỉ trong bộ nhớ — GUI/QR hiện đúng cổng thật
-    core.log("Server LAN chạy tại http://0.0.0.0:%s" % port)
+    core.log(f"Server LAN chạy tại http://0.0.0.0:{port}")
     core.broadcast_event("server", True)
     core.broadcast_event("history", ("server", "Server LAN chạy ở cổng %d" % port))
     stream_task = asyncio.create_task(core.stream_loop())
     try:
         await relay_client.start_if_enabled(cfg)
     except Exception as e:
-        core.log("Relay khởi động lỗi: %s" % e)
+        core.log(f"Relay khởi động lỗi: {e}")
     started_evt.set()
     try:
         await asyncio.Event().wait()  # chạy mãi
@@ -141,35 +145,86 @@ def run_async_thread(cfg, events_q, started_evt):
     try:
         asyncio.run(async_main(cfg, events_q, started_evt))
     except Exception as e:
-        core.log("Async thread dừng: %r" % e)
+        core.log(f"Async thread dừng: {e!r}")
         started_evt.set()
 
 
-def run_headless(cfg, events_q):
+def _doctor_report():
+    report = {"summary": {"pass": 0, "warn": 0, "fail": 0}, "checks": []}
+
+    def add_check(name, ok, details, level="pass"):
+        record = {"name": name, "ok": bool(ok), "level": level, "details": details}
+        report["checks"].append(record)
+        if level == "pass":
+            report["summary"]["pass"] += 1
+        elif level == "warn":
+            report["summary"]["warn"] += 1
+        else:
+            report["summary"]["fail"] += 1
+
+    add_check("python", sys.version_info >= (3, 10), sys.version, "pass")
+    try:
+        import tkinter  # noqa: F401
+        add_check("tkinter", True, "Tkinter import OK", "pass")
+    except Exception as exc:
+        add_check("tkinter", False, str(exc), "warn")
+    try:
+        import aiohttp  # noqa: F401
+        add_check("aiohttp", True, "aiohttp import OK", "pass")
+    except Exception as exc:
+        add_check("aiohttp", False, str(exc), "fail")
+    try:
+        import capture  # noqa: F401
+        add_check("capture", True, "capture package import OK", "pass")
+    except Exception as exc:
+        add_check("capture", False, str(exc), "fail")
+    try:
+        import server  # noqa: F401
+        add_check("server", True, "server module import OK", "pass")
+    except Exception as exc:
+        add_check("server", False, str(exc), "fail")
+    add_check("startup_flags", True, "supports --doctor, --json, --exit-after, --print-ready", "pass")
+    return report
+
+
+def run_headless(cfg, events_q, exit_after=None, print_ready=False):
+    if print_ready:
+        print("READY touchlink headless port={}".format(cfg.get("port", cfgmod.DEFAULT_PORT)), flush=True)
     print("=" * 56)
-    print("TouchLink v%s (headless%s)" % (cfgmod.VERSION, ", SAFE-TEST" if inp.SAFE_TEST else ""))
-    print("Mã máy   : %s" % cfg["device_id"])
-    print("Mật khẩu : %s" % util.password_plain(cfg))
+    print("TouchLink v{} (headless{})".format(cfgmod.VERSION, ", SAFE-TEST" if inp.SAFE_TEST else ""))
+    print("Device code: {}".format(cfg["device_id"]))
+    print(f"Password: {util.password_plain(cfg)}")
     for u in util.build_urls(cfg):
-        print("Địa chỉ  : %s" % u)
+        print(f"Address: {u}")
     print("=" * 56)
-    print("[Headless] ⚠ Overlay không hiện khi chạy --headless.")
-    print("[Headless] Hotkey Ctrl+Alt+Shift+F12 vẫn hoạt động (ngắt viewer khẩn cấp).", flush=True)
+    print("[Headless] Overlay is not visible when running --headless.")
+    print("[Headless] Hotkey Ctrl+Alt+Shift+F12 remains active for emergency disconnect.", flush=True)
+    deadline = None if exit_after is None else time.monotonic() + float(exit_after)
     try:
         while True:
-            kind, data = events_q.get()
+            timeout = 1.0
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    print(f"[Headless] exit-after reached ({exit_after}s)", flush=True)
+                    return 0
+                timeout = min(1.0, max(0.1, remaining))
+            try:
+                kind, data = events_q.get(timeout=timeout)
+            except queue.Empty:
+                continue
             if kind == "log":
-                print("  ·", data, flush=True)
+                print("  -", data, flush=True)
             elif kind == "clients":
                 n = int(data)
                 if n > 0:
-                    print("  ⚠ CảNH BÁO: đang có %d viewer điều khiển máy tính này!" % n, flush=True)
+                    print("  WARNING: %d viewer(s) are controlling this machine!" % n, flush=True)
                 else:
-                    print("  · viewers: 0", flush=True)
+                    print("  viewers: 0", flush=True)
             elif kind == "chat":
-                print("  [chat] %s: %s" % data, flush=True)
+                print("  [chat] {}: {}".format(*data), flush=True)
     except KeyboardInterrupt:
-        pass
+        return 0
 
 
 def run_gui(cfg, events_q):
@@ -181,7 +236,18 @@ def main():
     args = parse_args()
     if args.version:
         print("TouchLink", cfgmod.VERSION)
-        return
+        return 0
+    if args.doctor:
+        report = _doctor_report()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print("TouchLink doctor")
+            for check in report["checks"]:
+                status = "PASS" if check["level"] == "pass" else "WARN" if check["level"] == "warn" else "FAIL"
+                print(f"- {status}: {check['name']} :: {check['details']}")
+            print(f"Summary: pass={report['summary']['pass']} warn={report['summary']['warn']} fail={report['summary']['fail']}")
+        return 0
     try:  # exe windowed: stdout có thể None/cp1252 — ép UTF-8 để in tiếng Việt
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -213,9 +279,11 @@ def main():
     t.start()
     started_evt.wait(timeout=10)
 
+    if args.print_ready:
+        print("READY touchlink port={} headless={}".format(cfg.get("port", cfgmod.DEFAULT_PORT), bool(args.headless)), flush=True)
+
     if args.headless:
         cfg["_headless"] = True
-        # Hotkey khẩn cấp ngay cả trong headless (overlay_mod không cần Tk root)
         try:
             import overlay as overlay_mod
 
@@ -235,16 +303,17 @@ def main():
 
             overlay_mod._register_hotkey(_headless_disconnect)
         except Exception as e:
-            print("[Headless] overlay hotkey lỗi: %s" % e, flush=True)
-        run_headless(cfg, events_q)
+            print(f"[Headless] overlay hotkey lỗi: {e}", flush=True)
+        return run_headless(cfg, events_q, exit_after=args.exit_after, print_ready=False)
     else:
         cfg["_headless"] = False
         try:
             run_gui(cfg, events_q)
         except Exception as e:
-            print("GUI lỗi (%r) — chuyển sang headless." % e)
-            run_headless(cfg, events_q)
+            print(f"GUI lỗi ({e!r}) — chuyển sang headless.")
+            return run_headless(cfg, events_q, exit_after=args.exit_after, print_ready=args.print_ready)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

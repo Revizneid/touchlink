@@ -10,11 +10,9 @@ from __future__ import annotations
 import ctypes
 import platform
 import threading
-import time
-from typing import Callable
+from collections.abc import Callable
 
 import core
-
 
 # ---------------------------------------------------------------------------
 # Ẩn octet cuối IP để không lộ IP đầy đủ trên thanh overlay
@@ -152,7 +150,7 @@ class ControlOverlay:
             self._reposition()
 
         except Exception as e:
-            core.log("Overlay: không khởi tạo được cửa sổ (%s)" % e)
+            core.log(f"Overlay: không khởi tạo được cửa sổ ({e})")
             self._win = None
 
     def _reposition(self) -> None:
@@ -160,11 +158,10 @@ class ControlOverlay:
         if self._win is None:
             return
         try:
-            import tkinter as tk
             sw = self._root.winfo_screenwidth()
             self._win.update_idletasks()
             w = self._win.winfo_reqwidth()
-            h = self._win.winfo_reqheight()
+            self._win.winfo_reqheight()
             margin = 8
             x = sw - w - margin
             y = margin
@@ -184,7 +181,7 @@ class ControlOverlay:
         """Hiện overlay khi có ≥1 viewer đã xác thực."""
         if self._headless:
             names = ", ".join(_mask_name(n) for n in viewer_names)
-            core.log("⚠ CẢNH BÁO: Máy đang được điều khiển từ xa! Viewer: %s" % names)
+            core.log(f"⚠ CẢNH BÁO: Máy đang được điều khiển từ xa! Viewer: {names}")
             return
         if self._win is None:
             return
@@ -198,7 +195,7 @@ class ControlOverlay:
             self._reposition()
             self._visible = True
         except Exception as e:
-            core.log("Overlay show lỗi: %s" % e)
+            core.log(f"Overlay show lỗi: {e}")
 
     def hide(self) -> None:
         """Ẩn overlay khi không còn viewer nào."""
@@ -244,7 +241,7 @@ class ControlOverlay:
             try:
                 self._disconnect_cb()
             except Exception as e:
-                core.log("Overlay disconnect callback lỗi: %s" % e)
+                core.log(f"Overlay disconnect callback lỗi: {e}")
 
 
 # ---------------------------------------------------------------------------

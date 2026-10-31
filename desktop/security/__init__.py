@@ -14,16 +14,16 @@ from .service_hardening import (
 from .trust_store import DeviceTrustStore
 
 __all__ = [
+    "MAX_PIPE_REQUEST_BYTES",
+    "PIPE_ALLOWED_OPS",
+    "VALIDATE_PIPE_OPS",
     "AuditLogger",
     "DeviceKeyPair",
     "DeviceTrustStore",
     "E2EChannel",
-    "MAX_PIPE_REQUEST_BYTES",
     "OneTimePasscode",
     "PairingSession",
-    "PIPE_ALLOWED_OPS",
     "TOTPSecret",
-    "VALIDATE_PIPE_OPS",
     "build_pipe_sddl",
     "compute_sas",
     "derive_passcode_key",

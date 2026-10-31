@@ -5,14 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from typing import Any, Dict, Iterable, Optional, Set
+from collections.abc import Iterable
+from typing import Any
 
 PIPE_ALLOWED_OPS: frozenset[str] = frozenset({"ping", "grab", "input"})
 VALIDATE_PIPE_OPS = PIPE_ALLOWED_OPS
 MAX_PIPE_REQUEST_BYTES = 1024 * 1024
 
 
-def sanitize_pipe_operation(op: Any) -> Optional[Dict[str, Any]]:
+def sanitize_pipe_operation(op: Any) -> dict[str, Any] | None:
     """Return a normalized operation dict only if it matches the explicit allowlist."""
     if not isinstance(op, dict):
         return None
@@ -21,7 +22,7 @@ def sanitize_pipe_operation(op: Any) -> Optional[Dict[str, Any]]:
     if op_name not in PIPE_ALLOWED_OPS:
         return None
 
-    cleaned: Dict[str, Any] = {"op": op_name}
+    cleaned: dict[str, Any] = {"op": op_name}
     for key, value in op.items():
         if key == "op":
             continue
@@ -29,7 +30,7 @@ def sanitize_pipe_operation(op: Any) -> Optional[Dict[str, Any]]:
 
     try:
         payload = json.dumps(cleaned, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
     if len(payload) > MAX_PIPE_REQUEST_BYTES:
@@ -40,10 +41,10 @@ def sanitize_pipe_operation(op: Any) -> Optional[Dict[str, Any]]:
 
 def validate_pipe_client(
     *,
-    client_exe_path: Optional[str] = None,
-    install_root: Optional[str] = None,
-    allowed_hashes: Optional[Iterable[str]] = None,
-    allowed_basenames: Optional[Iterable[str]] = None,
+    client_exe_path: str | None = None,
+    install_root: str | None = None,
+    allowed_hashes: Iterable[str] | None = None,
+    allowed_basenames: Iterable[str] | None = None,
 ) -> bool:
     """Accept only a trusted executable path or a hash that matches a known-good binary."""
     if not client_exe_path:
@@ -51,8 +52,8 @@ def validate_pipe_client(
 
     raw_path = str(client_exe_path)
     absolute_path = os.path.abspath(raw_path)
-    normalized_hashes: Set[str] = {str(h).lower() for h in (allowed_hashes or [])}
-    normalized_names: Set[str] = {str(n).lower() for n in (allowed_basenames or [])}
+    normalized_hashes: set[str] = {str(h).lower() for h in (allowed_hashes or [])}
+    normalized_names: set[str] = {str(n).lower() for n in (allowed_basenames or [])}
 
     if normalized_hashes:
         raw_digest = hashlib.sha256(raw_path.encode("utf-8")).hexdigest()
@@ -66,16 +67,18 @@ def validate_pipe_client(
 
     if install_root and os.path.isdir(str(install_root)):
         try:
-            common = os.path.commonpath([os.path.abspath(str(install_root)), path])
-            if common == os.path.abspath(str(install_root)):
+            install_dir = os.path.abspath(str(install_root))
+            target_path = os.path.abspath(raw_path)
+            common = os.path.commonpath([install_dir, target_path])
+            if common == install_dir:
                 return True
-        except Exception:
+        except (TypeError, ValueError, OSError):
             pass
 
     return False
 
 
-def build_pipe_sddl(current_user_sid: Optional[str] = None) -> str:
+def build_pipe_sddl(current_user_sid: str | None = None) -> str:
     """Build a conservative SDDL for the pipe so only SYSTEM + Administrators + the install user can access it."""
     sddl = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;IU)(A;;GR;;;DU)"
     if current_user_sid:

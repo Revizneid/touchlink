@@ -8,8 +8,7 @@ real LAN helper code can mount onto it later.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Iterable, List
-
+from typing import Any
 
 _MAC_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
@@ -29,7 +28,7 @@ def build_magic_packet(mac_address: str) -> bytes:
     return packet
 
 
-def validate_wake_request(payload: Dict[str, Any] | None) -> bool:
+def validate_wake_request(payload: dict[str, Any] | None) -> bool:
     if not isinstance(payload, dict):
         return False
     mac = str(payload.get("target_mac") or "")
@@ -39,12 +38,10 @@ def validate_wake_request(payload: Dict[str, Any] | None) -> bool:
         return False
     if not is_valid_mac_address(mac):
         return False
-    if permission.lower() != "wake":
-        return False
-    return True
+    return permission.lower() == "wake"
 
 
-def build_wake_request(target_mac: str, device_id: str, *, permission: str = "wake") -> Dict[str, Any]:
+def build_wake_request(target_mac: str, device_id: str, *, permission: str = "wake") -> dict[str, Any]:
     if not validate_wake_request({
         "target_mac": target_mac,
         "device_id": device_id,

@@ -11,14 +11,14 @@ def lan_ips():
     try:
         _host, _alias, addrs = socket.gethostbyname_ex(socket.gethostname())
         ips.update(a for a in addrs if not a.startswith("127."))
-    except Exception:
+    except OSError:
         pass
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         ips.add(s.getsockname()[0])
         s.close()
-    except Exception:
+    except OSError:
         pass
     return sorted(ips)
 
@@ -26,8 +26,8 @@ def lan_ips():
 def build_urls(cfg):
     urls = []
     for ip in lan_ips():
-        urls.append("http://%s:%s" % (ip, cfg.get("port")))
-    return urls or ["http://127.0.0.1:%s" % cfg.get("port")]
+        urls.append("http://{}:{}".format(ip, cfg.get("port")))
+    return urls or ["http://127.0.0.1:{}".format(cfg.get("port"))]
 
 
 def password_plain(cfg):

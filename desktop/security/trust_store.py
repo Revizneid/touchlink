@@ -7,10 +7,12 @@ then persisted to disk. The in-memory path is also supported for tests.
 from __future__ import annotations
 
 import base64
+import builtins
 import json
 import os
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -18,9 +20,9 @@ from desktop.secure import protect, unprotect
 
 
 class DeviceTrustStore:
-    def __init__(self, path: Optional[str] = None):
+    def __init__(self, path: str | None = None):
         self.path = path or None
-        self._devices: Dict[str, Dict[str, Any]] = {}
+        self._devices: dict[str, dict[str, Any]] = {}
         if self.path and os.path.exists(self.path):
             self._load()
 
@@ -34,7 +36,7 @@ class DeviceTrustStore:
             data = json.loads(plaintext)
             if isinstance(data, dict):
                 self._devices = {str(k): v for k, v in data.get("devices", {}).items()}
-        except Exception:
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
             self._devices = {}
 
     def _save(self):
@@ -51,9 +53,9 @@ class DeviceTrustStore:
         device_name: str,
         public_key_b64: str,
         permission: str = "control",
-        expires_at: Optional[float] = None,
-        notes: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        expires_at: float | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
         entry = {
             "device_id": str(device_id),
             "device_name": str(device_name),
@@ -69,7 +71,7 @@ class DeviceTrustStore:
         self._save()
         return dict(entry)
 
-    def get(self, device_id: str) -> Optional[Dict[str, Any]]:
+    def get(self, device_id: str) -> dict[str, Any] | None:
         entry = self._devices.get(str(device_id))
         if entry is None or bool(entry.get("revoked")):
             return None
@@ -88,7 +90,7 @@ class DeviceTrustStore:
         self._save()
         return True
 
-    def list(self) -> List[Dict[str, Any]]:
+    def list(self) -> builtins.list[dict[str, Any]]:
         return [dict(v) for v in sorted(self._devices.values(), key=lambda x: x.get("device_name", ""))]
 
     def update_last_seen(self, device_id: str):
@@ -106,7 +108,7 @@ class DeviceTrustStore:
             public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
             public_key.verify(signature, (nonce.decode("utf-8") if isinstance(nonce, (bytes, bytearray)) else str(nonce)).encode("utf-8"))
             return True
-        except Exception:
+        except (TypeError, ValueError):
             return False
 
     def trusted_device_ids(self) -> Iterable[str]:

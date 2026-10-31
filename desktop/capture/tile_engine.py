@@ -17,13 +17,10 @@ from __future__ import annotations
 import io
 import struct
 import time
-from dataclasses import dataclass, field
-from typing import Sequence
+from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image
-
-from .base import Rect
 
 # struct format cho header 0x02: type(B), fw(H), fh(H), tile_sz(H), n_tiles(H)
 _HEADER_FMT = struct.Struct(">BHHHH")
@@ -138,7 +135,7 @@ class TileEngine:
         """Encode các tile có dirty_mask=True thành JPEG."""
         h, w = frame_rgb.shape[:2]
         ts = self.tile_size
-        cols = (w + ts - 1) // ts
+        (w + ts - 1) // ts
         tiles: list[EncodedTile] = []
 
         # numpy nơi indices của tile dirty

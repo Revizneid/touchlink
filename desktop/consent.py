@@ -16,8 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
-from typing import Callable
+from collections.abc import Callable
 
 import core
 
@@ -86,7 +85,7 @@ def _show_dialog(viewer_name: str, is_relay: bool, timeout_s: int) -> str:
         tk.Label(win, text="🔔  Yêu cầu kết nối mới", bg=BG, fg=WARN,
                  font=("Segoe UI", 13, "bold"), pady=10).pack(fill="x", padx=20)
         src = ("Relay (internet)" if is_relay else "Mạng LAN")
-        tk.Label(win, text="Nguồn: %s" % src, bg=BG, fg="#94a3b8", font=NORM).pack()
+        tk.Label(win, text=f"Nguồn: {src}", bg=BG, fg="#94a3b8", font=NORM).pack()
         tk.Label(win, text=viewer_name, bg=BG, fg=FG, font=BOLD, pady=4).pack()
         tk.Label(win, text="muốn xem và điều khiển máy tính này.", bg=BG, fg=FG,
                  font=NORM).pack(pady=(0, 8))
@@ -111,9 +110,9 @@ def _show_dialog(viewer_name: str, is_relay: bool, timeout_s: int) -> str:
                 pass
 
         def _style(bg, fg="#fff"):
-            return dict(bg=bg, fg=fg, font=("Segoe UI", 10, "bold"),
-                        relief="flat", padx=14, pady=6, cursor="hand2",
-                        borderwidth=0, highlightthickness=0)
+            return {"bg": bg, "fg": fg, "font": ("Segoe UI", 10, "bold"),
+                        "relief": "flat", "padx": 14, "pady": 6, "cursor": "hand2",
+                        "borderwidth": 0, "highlightthickness": 0}
 
         tk.Button(btn_frame, text="✓ Cho phép", command=lambda: _set(ALLOW),
                   **_style(ACCENT)).pack(side="left", expand=True, fill="x", padx=(0,4))
@@ -185,7 +184,7 @@ def ask(
     Nếu headless: từ chối ngay lập tức (không GUI).
     """
     if headless:
-        core.log("Consent: headless mode → tự động từ chối viewer '%s'" % viewer_name)
+        core.log(f"Consent: headless mode → tự động từ chối viewer '{viewer_name}'")
         loop.call_soon_threadsafe(callback, DENY)
         return
 
@@ -197,9 +196,9 @@ def ask(
         try:
             res = _show_dialog(viewer_name, is_relay, CONSENT_TIMEOUT_S)
         except Exception as e:
-            core.log("Consent dialog lỗi: %s" % e)
+            core.log(f"Consent dialog lỗi: {e}")
             res = DENY
-        core.log("Consent: '%s' → %s" % (viewer_name, res))
+        core.log(f"Consent: '{viewer_name}' → {res}")
         loop.call_soon_threadsafe(callback, res)
 
     t = threading.Thread(target=_run, daemon=True, name="tl-consent")

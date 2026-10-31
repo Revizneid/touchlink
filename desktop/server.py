@@ -4,11 +4,10 @@ import json
 import os
 import sys
 
-from aiohttp import WSMsgType, web
-
 import core
+from aiohttp import WSMsgType, web
 from auth import RateLimiter
-from protocol import PROTOCOL_VERSION, CAPS, HELLO_TIMEOUT, MAX_MSG_SIZE
+from protocol import CAPS, HELLO_TIMEOUT, MAX_MSG_SIZE, PROTOCOL_VERSION
 
 # Khi chạy exe (PyInstaller onefile): thư mục web/ được bundle trong sys._MEIPASS
 if getattr(sys, "frozen", False):
@@ -25,7 +24,7 @@ def _lan_ip():
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception:
+    except OSError:
         return "127.0.0.1"
 
 
@@ -85,7 +84,7 @@ def make_app(cfg):
             return ws
         try:
             auth_msg = json.loads(first.data)
-        except Exception:
+        except (TypeError, ValueError):
             await ws.close()
             return ws
         if auth_msg.get("type") != "auth":
@@ -93,9 +92,11 @@ def make_app(cfg):
             await ws.close()
             return ws
         if limiter.is_banned(peer):
-            await ws.send_json({"type": "auth_fail",
-                                "message": "Đang bị khóa %ds do thử sai nhiều lần"
-                                           % limiter.ban_remaining(peer)})
+            remaining = limiter.ban_remaining(peer)
+            await ws.send_json({
+                "type": "auth_fail",
+                "message": f"Đang bị khóa {remaining}s do thử sai nhiều lần",
+            })
             await ws.close()
             return ws
         ok = await core.verify_and_accept(conn, auth_msg)
@@ -121,13 +122,11 @@ def make_app(cfg):
                 if hello_data.get("type") == "hello":
                     conn.peer_v = int(hello_data.get("v") or 1)
                     conn.peer_caps = list(hello_data.get("caps") or [])
-                    core.log(
-                        "Viewer hello: v=%d caps=%s" % (conn.peer_v, conn.peer_caps)
-                    )
+                    core.log(f"Viewer hello: v={conn.peer_v} caps={conn.peer_caps}")
                 else:
                     # message không phải hello: đưa vào xử lý bình thường
                     await core.handle_client_message(conn, hello_data)
-        except (asyncio.TimeoutError, Exception):
+        except asyncio.TimeoutError:
             pass  # v1 viewer không gửi hello — hoạt động bình thường
         await core.add_client(conn)
         try:
@@ -135,7 +134,7 @@ def make_app(cfg):
                 if msg.type == WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
-                    except Exception:
+                    except (TypeError, ValueError):
                         continue
                     await core.handle_client_message(conn, data)
                 elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
@@ -148,6 +147,9 @@ def make_app(cfg):
     app.add_routes(routes)
     if os.path.isdir(WEB_DIR):
         app.router.add_get("/", index)
+        app.router.add_get("/app.js", lambda r: web.FileResponse(os.path.join(WEB_DIR, "app.js")))
+        app.router.add_get("/style.css", lambda r: web.FileResponse(os.path.join(WEB_DIR, "style.css")))
+        app.router.add_get("/manifest.webmanifest", lambda r: web.FileResponse(os.path.join(WEB_DIR, "manifest.webmanifest")))
         app.router.add_get("/sw.js", lambda r: web.FileResponse(os.path.join(WEB_DIR, "sw.js")))
         app.router.add_static("/static/", WEB_DIR)
     return app

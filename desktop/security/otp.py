@@ -7,7 +7,6 @@ import hashlib
 import hmac
 import secrets
 import time
-from typing import List
 
 
 class TOTPSecret:
@@ -16,7 +15,7 @@ class TOTPSecret:
         self.issuer = issuer
 
     @classmethod
-    def generate(cls, issuer: str = "TouchLink") -> "TOTPSecret":
+    def generate(cls, issuer: str = "TouchLink") -> TOTPSecret:
         secret = base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
         return cls(secret=secret, issuer=issuer)
 
@@ -54,7 +53,7 @@ def validate_totp(secret: str, code: str, *, time_value: float | None = None, wi
         target = str(code).strip().zfill(digits)
         if len(target) != digits or not target.isdigit():
             return False
-    except Exception:
+    except (TypeError, ValueError):
         return False
 
     epoch = float(time_value if time_value is not None else time.time())
@@ -66,11 +65,11 @@ def validate_totp(secret: str, code: str, *, time_value: float | None = None, wi
     return False
 
 
-def generate_recovery_codes(seed: str, count: int = 10) -> List[str]:
+def generate_recovery_codes(seed: str, count: int = 10) -> list[str]:
     """Generate a list of single-use recovery codes from a stable seed."""
-    values: List[str] = []
+    values: list[str] = []
     for i in range(count):
-        token = hashlib.sha256(f"{seed}:{i}:{secrets.token_hex(8)}".encode("utf-8")).hexdigest()[:8].upper()
+        token = hashlib.sha256(f"{seed}:{i}:{secrets.token_hex(8)}".encode()).hexdigest()[:8].upper()
         values.append(token)
     return values
 

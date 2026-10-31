@@ -7,7 +7,8 @@ aiortc integration lands.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from .base import Transport
 
@@ -20,10 +21,10 @@ def _normalize_transport_name(name: str) -> str:
     return str(name).strip().lower().replace("-", "_")
 
 
-def resolve_transport_order(transports: Iterable[str] | None) -> List[str]:
+def resolve_transport_order(transports: Iterable[str] | None) -> list[str]:
     """Return the supported transport order with duplicates removed."""
     seen = set()
-    ordered: List[str] = []
+    ordered: list[str] = []
     for raw in transports or []:
         name = _normalize_transport_name(raw)
         if name in {"lan_ws", "webrtc", "relay_ws"} and name not in seen:
@@ -32,7 +33,7 @@ def resolve_transport_order(transports: Iterable[str] | None) -> List[str]:
     return ordered
 
 
-def build_data_channels() -> Dict[str, Dict[str, Any]]:
+def build_data_channels() -> dict[str, dict[str, Any]]:
     """Return the channel layout used for control, input, settings, and clipboard."""
     return {
         "input": {"label": "input", "ordered": True, "reliable": True, "direction": "bidirectional"},
@@ -51,7 +52,7 @@ def build_webrtc_quality_profile(
     content: str = "screen",
     is_idle: bool = False,
     bandwidth_kbps: int = 1500,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return a WebRTC quality profile aligned with the Sprint 3.3 plan."""
     content_name = (content or "screen").lower()
     area = max(1, int(width)) * max(1, int(height))
@@ -108,7 +109,7 @@ class WebRtcTransport(Transport):
         self._started = True
         return True
 
-    def configure_quality(self, **kwargs: Any) -> Dict[str, Any]:
+    def configure_quality(self, **kwargs: Any) -> dict[str, Any]:
         self.quality_profile = build_webrtc_quality_profile(**kwargs)
         self.preferred_codec = self.quality_profile["codec"]
         return self.quality_profile
@@ -132,7 +133,7 @@ class WebRtcTransport(Transport):
             self._data_callback(message)
         return {"transport": "webrtc", "sent": message}
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         return {
             "transport": "webrtc",
             "started": self.started,
