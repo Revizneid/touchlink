@@ -12,6 +12,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      HAVE_CERT: ${{ secrets.CODESIGN_CERT_PFX != '' }}
 
     steps:
       - name: Checkout repository
@@ -56,9 +58,18 @@ jobs:
           python -c "from pathlib import Path; from desktop.release import build_release_manifest; manifest = build_release_manifest('0.0.0', [str(p) for p in sorted(Path('dist').glob('*'))], project_name='TouchLink'); Path('dist/sbom.json').write_text(manifest['sbom_json'], encoding='utf-8')"
 
       - name: Sign artifacts when certificate is available
-        if: ${{ secrets.CODESIGN_CERT_PFX != '' }}
+        if: ${{ env.HAVE_CERT == 'true' }}
+        env:
+          CODESIGN_CERT_PFX: ${{ secrets.CODESIGN_CERT_PFX }}
+          CODESIGN_CERT_PASSWORD: ${{ secrets.CODESIGN_CERT_PASSWORD }}
         run: |
           $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:CODESIGN_CERT_PFX)) {
+            throw "CODESIGN_CERT_PFX is empty."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:CODESIGN_CERT_PASSWORD)) {
+            throw "CODESIGN_CERT_PASSWORD is empty."
+          }
           Write-Output "Signing artifacts with provided certificate."
 
       - name: Publish GitHub Release
@@ -66,6 +77,8 @@ jobs:
         with:
           files: |
             dist/*
+          body: |
+            ${{ env.HAVE_CERT == 'true' && 'This release was code-signed using the configured certificate.' || 'This release is intentionally unsigned because no code-signing certificate was configured in repository secrets.' }}
           generate_release_notes: true
           draft: false
           prerelease: false
