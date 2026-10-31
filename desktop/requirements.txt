@@ -3,7 +3,7 @@ mss>=9.0
 Pillow>=10.0
 pyperclip>=1.8
 qrcode[pil]>=7.4
-cryptography>=42.0
+cryptography>=50.0.2
 pywin32>=306
 # Sprint 1.1: DXGI Desktop Duplication backend — thấp CPU hơn GDI/mss
 # dxcam 0.0.5 là bản ổn định cuối, hỗ trợ Windows 8+, WDDM
