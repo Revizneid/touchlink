@@ -9,4 +9,4 @@ pywin32>=306
 # dxcam 0.0.5 là bản ổn định cuối, hỗ trợ Windows 8+, WDDM
 dxcam==0.0.5
 # Sprint 1.1: numpy dùng cho tile hash (XOR reduction) và resize
-numpy>=1.24
+numpy>=2.2.6
