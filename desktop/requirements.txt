@@ -7,6 +7,6 @@ cryptography>=42.0
 pywin32>=306
 # Sprint 1.1: DXGI Desktop Duplication backend — thấp CPU hơn GDI/mss
 # dxcam 0.0.5 là bản ổn định cuối, hỗ trợ Windows 8+, WDDM
-dxcam==0.0.5
+dxcam==0.3.0
 # Sprint 1.1: numpy dùng cho tile hash (XOR reduction) và resize
 numpy>=1.24

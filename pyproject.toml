@@ -18,7 +18,7 @@ dependencies = [
     "cryptography>=42.0",
     "numpy>=1.24",
     "pywin32>=306; platform_system == 'Windows'",
-    "dxcam==0.0.5; platform_system == 'Windows'",
+    "dxcam==0.3.0; platform_system == 'Windows'",
 ]
 
 [project.scripts]
