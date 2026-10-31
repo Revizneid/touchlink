@@ -6,3 +6,9 @@ desktop/config.json
 .DS_Store
 build/
 dist/
+
+.venv*/
+log_*.txt
+out_*.txt
+err_*.txt
+diag_logs/
