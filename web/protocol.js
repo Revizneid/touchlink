@@ -13,6 +13,7 @@ export const CAPS = [
   'multi_monitor',   // chọn màn hình trong đa giám sát
   'clipboard_sync',  // đồng bộ clipboard 2 chiều tự động
   'chat',            // chat dạng text
+  'tiles',           // frame nhị phân 0x02 dirty-rect tile (Sprint 1.1)
   'e2e-v1',          // mã hóa đầu-cuối trên relay
 ];
 

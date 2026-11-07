@@ -577,9 +577,21 @@ function onFrameTile(buf) {
     ensureTileCanvas(fw, fh);
 
     var offset = 9;  // sau header 9 byte
-    var pending = nTiles;
-    var newBmp = null;
+    var tiles = [];
+    for (var i = 0; i < nTiles; i++) {
+      if (offset + 8 > buf.byteLength) break;
+      var tx = dv.getUint16(offset);
+      var ty = dv.getUint16(offset + 2);
+      var jlen = dv.getUint32(offset + 4);
+      offset += 8;
+      if (offset + jlen > buf.byteLength) break;
+      var jpegSlice = buf.slice(offset, offset + jlen);
+      offset += jlen;
+      tiles.push({ tx: tx, ty: ty, data: jpegSlice });
+    }
+    if (tiles.length === 0) { frameCount++; return; }
 
+    var pending = tiles.length;
     function finalize() {
       // Sau khi tất cả tile đã vẽ lên tileCanvas → tạo ImageBitmap từ canvas
       if (window.createImageBitmap) {
@@ -596,43 +608,32 @@ function onFrameTile(buf) {
       frameCount++;
     }
 
-    for (var i = 0; i < nTiles; i++) {
-      if (offset + 8 > buf.byteLength) break;
-      var tx = dv.getUint16(offset);
-      var ty = dv.getUint16(offset + 2);
-      var jlen = dv.getUint32(offset + 4);
-      offset += 8;
-      if (offset + jlen > buf.byteLength) break;
-      var jpegSlice = buf.slice(offset, offset + jlen);
-      offset += jlen;
-      /* jshint loopfunc: true */
-      (function (jtx, jty, jbuf) {
-        var blob2 = new Blob([jbuf], { type: 'image/jpeg' });
-        if (window.createImageBitmap) {
-          createImageBitmap(blob2).then(function (tb) {
-            st.tileCtx.drawImage(tb, jtx, jty);
-            if (tb.close) tb.close();
-            pending--;
-            if (pending <= 0) finalize();
-          }).catch(function () {
-            pending--;
-            if (pending <= 0) finalize();
-          });
-        } else {
-          var timg = new Image();
-          timg.onload = function () {
-            st.tileCtx.drawImage(timg, jtx, jty);
-            pending--;
-            if (pending <= 0) finalize();
-          };
-          timg.onerror = function () {
-            pending--;
-            if (pending <= 0) finalize();
-          };
-          timg.src = URL.createObjectURL(blob2);
-        }
-      }(tx, ty, jpegSlice));
-    }
+    tiles.forEach(function (t) {
+      var blob = new Blob([t.data], { type: 'image/jpeg' });
+      if (window.createImageBitmap) {
+        createImageBitmap(blob).then(function (tb) {
+          st.tileCtx.drawImage(tb, t.tx, t.ty);
+          if (tb.close) tb.close();
+          pending--;
+          if (pending <= 0) finalize();
+        }).catch(function () {
+          pending--;
+          if (pending <= 0) finalize();
+        });
+      } else {
+        var img = new Image();
+        img.onload = function () {
+          st.tileCtx.drawImage(img, t.tx, t.ty);
+          pending--;
+          if (pending <= 0) finalize();
+        };
+        img.onerror = function () {
+          pending--;
+          if (pending <= 0) finalize();
+        };
+        img.src = URL.createObjectURL(blob);
+      }
+    });
   } catch (e) {}
 }
 
