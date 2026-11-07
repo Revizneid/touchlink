@@ -63,26 +63,30 @@ class MssCapturer:
 
     def grab(self) -> Frame | None:
         """Chụp một frame bằng mss. Thread-safe (mỗi thread có instance riêng)."""
-        sct = _get_sct()
-        mons = sct.monitors
-        idx = (self._monitor_idx
-               if 0 <= self._monitor_idx < len(mons)
-               else (1 if len(mons) > 1 else 0))
-        mon = mons[idx]
-        raw = sct.grab(mon)
-        # mss trả BGRA → dùng rawmode BGRX của Pillow
-        img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
-        import numpy as np
-        arr = np.array(img)
-        return Frame(
-            data=arr,
-            width=img.width,
-            height=img.height,
-            mon_left=mon["left"],
-            mon_top=mon["top"],
-            mon_width=mon["width"],
-            mon_height=mon["height"],
-        )
+        try:
+            sct = _get_sct()
+            mons = sct.monitors
+            idx = (self._monitor_idx
+                   if 0 <= self._monitor_idx < len(mons)
+                   else (1 if len(mons) > 1 else 0))
+            mon = mons[idx]
+            raw = sct.grab(mon)
+            # mss trả BGRA → dùng rawmode BGRX của Pillow
+            img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+            import numpy as np
+            arr = np.array(img)
+            return Frame(
+                data=arr,
+                width=img.width,
+                height=img.height,
+                mon_left=mon["left"],
+                mon_top=mon["top"],
+                mon_width=mon["width"],
+                mon_height=mon["height"],
+            )
+        except Exception as exc:
+            logger.debug("MssCapturer.grab lỗi: %s", exc)
+            return None
 
     def dirty_rects(self) -> list[Rect]:
         """mss không cung cấp dirty-rect; trả về list rỗng để tile engine so hash."""

@@ -7,7 +7,13 @@ Import tương thích ngược::
 """
 from .base import Capturer, Frame, Rect
 from .factory import grab_jpeg, list_monitors, make_capturer
-from .tile_engine import TILE_SIZE_DEFAULT, TileEngine, scale_frame
+from .tile_engine import (
+    TILE_SIZE_DEFAULT,
+    TileEngine,
+    merge_tile_payloads,
+    scale_frame,
+    unpack_tile_payload,
+)
 
 __all__ = [
     "TILE_SIZE_DEFAULT",
@@ -18,5 +24,7 @@ __all__ = [
     "grab_jpeg",
     "list_monitors",
     "make_capturer",
+    "merge_tile_payloads",
     "scale_frame",
+    "unpack_tile_payload",
 ]

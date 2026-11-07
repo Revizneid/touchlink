@@ -64,16 +64,22 @@ class DxgiCapturer:
         import dxcam  # type: ignore[import-untyped]
 
         self._monitor_idx = monitor
-        device_idx = max(0, monitor - 1)
+        if monitor <= 0:
+            raise RuntimeError(
+                "DXGI Desktop Duplication không hỗ trợ chế độ toàn bộ desktop ảo (monitor=0); cần fallback MSS"
+            )
+
+        output_idx = monitor - 1
         try:
             self._camera = dxcam.create(
-                device_idx=device_idx,
+                device_idx=0,
+                output_idx=output_idx,
                 output_color="RGB",
             )
             if self._camera is None:
                 raise RuntimeError("dxcam.create() trả None")
         except Exception as exc:
-            raise RuntimeError(f"dxcam không khởi tạo được: {exc}") from exc
+            raise RuntimeError(f"dxcam không khởi tạo được (monitor={monitor}): {exc}") from exc
 
         self._stop_evt.clear()
         self._thread = threading.Thread(
@@ -92,6 +98,7 @@ class DxgiCapturer:
                     return
             time.sleep(0.05)
 
+        self.stop()
         raise RuntimeError(
             f"DxgiCapturer: không có frame đầu sau {self._FIRST_FRAME_TIMEOUT:.1f}s (RDP/driver/session không hợp lệ)"
         )
@@ -108,15 +115,19 @@ class DxgiCapturer:
     def stop(self) -> None:
         """Dừng thread chụp và giải phóng camera."""
         self._stop_evt.set()
+        cam = self._camera
+        self._camera = None
+        if cam is not None:
+            try:
+                cam.release()
+            except Exception:
+                try:
+                    cam.stop()
+                except Exception:
+                    pass
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
-        if self._camera is not None:
-            try:
-                self._camera.stop()
-            except Exception:
-                pass
-            self._camera = None
         self._started = False
         logger.debug("DxgiCapturer.stop")
 
@@ -141,6 +152,8 @@ class DxgiCapturer:
 
         while not self._stop_evt.is_set():
             try:
+                if not getattr(cam, "is_capturing", False):
+                    break
                 arr = cam.get_latest_frame()
                 if arr is None:
                     time.sleep(0.005)
@@ -160,10 +173,13 @@ class DxgiCapturer:
                 with self._lock:
                     self._latest_frame = frame
             except Exception as exc:
+                if self._stop_evt.is_set():
+                    break
                 logger.warning("DxgiCapturer._capture_loop lỗi: %s", exc)
                 time.sleep(0.1)
 
         try:
-            cam.stop()
+            if getattr(cam, "is_capturing", False):
+                cam.stop()
         except Exception:
             pass
