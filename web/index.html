@@ -219,11 +219,11 @@
 window.addEventListener('DOMContentLoaded', function(){
   var c = document.createElement('script');
   c.type = 'module';
-  c.src = '/static/crypto.js?v=1';
+  c.src = '/static/crypto.js?v=2';
   document.body.appendChild(c);
 
   var s = document.createElement('script');
-  s.src = '/static/app.js?v=1';
+  s.src = '/static/app.js?v=2';
   document.body.appendChild(s);
 });
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost','127.0.0.1'].includes(location.hostname))) {

@@ -546,7 +546,7 @@ async def ws_handler(
                     a["bound"] = False
                     state.m_current_viewers += 1
                     # Gửi password về agent để xác minh (relay không xem nội dung)
-                    await _try_send(a["ws"], {"type": "auth", "password": password})
+                    await _try_send(a["ws"], {"type": "auth", "password": password, "viewer_ip": ip})
                     _log(logger, "INFO", "viewer_pairing", ip=ip,
                          device_id=did)
 

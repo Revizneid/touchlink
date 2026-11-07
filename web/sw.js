@@ -1,5 +1,5 @@
 /* TouchLink service worker — network-first cho code, fallback cache khi offline */
-var CACHE = 'touchlink-v3';
+var CACHE = 'touchlink-v3.0.1';
 var STATIC_ASSETS = [
   '/static/icons/icon-192.png',
   '/static/icons/icon-512.png',

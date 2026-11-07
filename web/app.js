@@ -399,45 +399,62 @@ function connect(hostStr, id, pass) {
     if (ev.data instanceof ArrayBuffer) { onFrame(ev.data); return; }
     var m;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
-    if (m.type === 'e2e' && st.e2eActive && st.e2eKey && window.TouchLinkCrypto) {
-      try {
-        var bin = atob(m.c);
-        var bytes = new Uint8Array(bin.length);
-        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        var dec = await window.TouchLinkCrypto.decryptE2E(
-          st.e2eKey, st.e2eRawKey, st.e2eTranscript, st.e2eLastRecv || 0, bytes
-        );
-        st.e2eLastRecv = dec.counter;
-        m = JSON.parse(dec.text);
-      } catch (e2eErr) {
-        console.error('Relay E2E giải mã thất bại:', e2eErr);
-        return;
+    if (m.type === 'e2e') {
+      if (!st.e2eActive || !st.e2eKey || !window.TouchLinkCrypto) {
+        for (var w = 0; w < 20; w++) {
+          if (st.e2eActive && st.e2eKey && window.TouchLinkCrypto) break;
+          await new Promise(function (r) { setTimeout(r, 100); });
+        }
+      }
+      if (st.e2eActive && st.e2eKey && window.TouchLinkCrypto) {
+        try {
+          var bin = atob(m.c);
+          var bytes = new Uint8Array(bin.length);
+          for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          var dec = await window.TouchLinkCrypto.decryptE2E(
+            st.e2eKey, st.e2eRawKey, st.e2eTranscript, st.e2eLastRecv || 0, bytes
+          );
+          st.e2eLastRecv = dec.counter;
+          m = JSON.parse(dec.text);
+        } catch (e2eErr) {
+          console.error('Relay E2E giải mã thất bại:', e2eErr);
+          return;
+        }
       }
     }
     if (m.type === 'auth_ok' || (m.type === 'auth_result' && m.ok)) {
       clearTimeout(authTimer);
       if (isRelay) wakeup.onAuthedOk();
       var d = m.type === 'auth_ok' ? m : (m.data || {});
-      // Khởi tạo kênh E2E nếu server bật
-      if (d.e2e && window.TouchLinkCrypto && st.cred && st.cred.pass) {
-        var transcript = d.transcript || ('touchlink-relay:' + (st.cred.id || ''));
-        window.TouchLinkCrypto.setupE2EKey(st.cred.pass, transcript).then(function (res) {
-          st.e2eKey = res.key;
-          st.e2eRawKey = res.rawKey;
-          st.e2eTranscript = res.transcriptBytes;
-          st.e2eCounter = 0;
-          st.e2eLastRecv = 0;
-          st.e2eActive = true;
-          st.e2eFingerprint = d.e2e_fingerprint || '';
-          if (st.e2eFingerprint) {
-            toast('🔒 E2E mã hóa bảo mật (Mã: ' + st.e2eFingerprint + ')', 5000);
-            updateMeta();
+      // Khởi tạo kênh E2E nếu server bật (chờ hoàn tất trước khi gửi tin tiếp theo)
+      if (d.e2e && st.cred && st.cred.pass) {
+        if (!window.TouchLinkCrypto) {
+          for (var waitC = 0; waitC < 20; waitC++) {
+            if (window.TouchLinkCrypto) break;
+            await new Promise(function (r) { setTimeout(r, 100); });
           }
-        }).catch(function (err) {
-          console.error('Khởi tạo E2E thất bại:', err);
-        });
+        }
+        if (window.TouchLinkCrypto) {
+          var transcript = d.transcript || ('touchlink-relay:' + (st.cred.id || ''));
+          try {
+            var res = await window.TouchLinkCrypto.setupE2EKey(st.cred.pass, transcript);
+            st.e2eKey = res.key;
+            st.e2eRawKey = res.rawKey;
+            st.e2eTranscript = res.transcriptBytes;
+            st.e2eCounter = 0;
+            st.e2eLastRecv = 0;
+            st.e2eActive = true;
+            st.e2eFingerprint = d.e2e_fingerprint || '';
+            if (st.e2eFingerprint) {
+              toast('🔒 E2E mã hóa bảo mật (Mã: ' + st.e2eFingerprint + ')', 5000);
+              updateMeta();
+            }
+          } catch (err) {
+            console.error('Khởi tạo E2E thất bại:', err);
+          }
+        }
       }
-      // Gửi hello ngược ngay sau khi xác thực thành công
+      // Gửi hello ngược ngay sau khi xác thực thành công (và E2E đã sẵn sàng)
       send({ type: 'hello', v: PROTOCOL_VERSION, caps: PROTOCOL_CAPS });
       onAuthed(d);
     } else if (m.type === 'hello') {

@@ -166,15 +166,21 @@ def init(cfg_ref, events_q, rate_limiter=None):
 
 
 def log(msg):
-    safe_msg = str(msg).encode("ascii", "replace").decode("ascii")
-    line = "[{}] {}".format(time.strftime("%H:%M:%S"), safe_msg)
+    msg_str = str(msg)
+    line = "[{}] {}".format(time.strftime("%H:%M:%S"), msg_str)
     try:
-        print(line, flush=True)  # stdout co the la None (exe GUI) hoặc không hỗ trợ UTF-8
+        print(line, flush=True)  # stdout có thể là None (exe GUI) hoặc không hỗ trợ UTF-8
+    except UnicodeEncodeError:
+        try:
+            enc = sys.stdout.encoding or "utf-8"
+            print(line.encode(enc, errors="replace").decode(enc), flush=True)
+        except Exception:
+            pass
     except Exception:
         pass
     if events is not None:
         try:
-            events.put(("log", safe_msg))
+            events.put(("log", msg_str))
         except Exception:
             pass
 

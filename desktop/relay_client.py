@@ -209,7 +209,9 @@ class RelayClient:
                 if inner.get("type") == "hello":
                     self.conn.peer_v = int(inner.get("v") or 1)
                     self.conn.peer_caps = list(inner.get("caps") or [])
+                    self.conn.caps = list(inner.get("caps") or [])
                     core.log(f"Relay viewer hello: v={self.conn.peer_v} caps={self.conn.peer_caps}")
+                    await core.handle_client_message(self.conn, inner)
                 else:
                     asyncio.create_task(core.handle_client_message(self.conn, inner))
         elif t == "send_wol":
