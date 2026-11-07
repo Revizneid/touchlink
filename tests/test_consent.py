@@ -37,7 +37,7 @@ for _mod in ("aiohttp", "capture", "secure", "input_control",
 
 import consent as consent_mod
 
-for _mod in ("aiohttp", "capture", "secure", "input_control",
+for _mod in ("core", "aiohttp", "capture", "secure", "input_control",
              "config", "util", "auth", "keepawake", "svcpipe"):
     if _mod in sys.modules and getattr(sys.modules[_mod], "__file__", None) is None:
         sys.modules.pop(_mod, None)

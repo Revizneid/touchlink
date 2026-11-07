@@ -213,6 +213,35 @@ class E2EChannel:
         self._sent_counter = 0
         self._recv_counter = 0
 
+    @classmethod
+    def from_passcode(
+        cls,
+        side: str,
+        passcode: str,
+        transcript: Any,
+        *,
+        max_message_size: int = MAX_E2E_MESSAGE_SIZE,
+    ) -> E2EChannel:
+        """Khởi tạo kênh E2E trực tiếp từ mật khẩu xác thực và transcript phiên."""
+        transcript_bytes = _coerce_bytes(transcript, name="transcript")
+        raw_key = derive_passcode_key(passcode, transcript_bytes)
+        instance = cls.__new__(cls)
+        instance.side = str(side)
+        instance.transcript = transcript_bytes
+        instance.max_message_size = max(1024, int(max_message_size))
+        instance.local_private_key = None
+        instance.remote_public_key = None
+        instance.local_identity_key = None
+        instance.remote_identity_key = None
+        instance._shared_secret = raw_key
+        instance._sent_counter = 0
+        instance._recv_counter = 0
+        return instance
+
+    def compute_fingerprint(self) -> str:
+        """Tính mã vân tay 8 ký tự để người dùng kiểm chứng chéo trực tiếp trên 2 máy."""
+        return hashlib.sha256(self._shared_secret).hexdigest()[:8].upper()
+
     def _derive_shared_secret(self) -> bytes:
         local_priv = self.local_private_key
         remote_pub = self.remote_public_key

@@ -13,6 +13,7 @@ def evaluate_connection_policy(
     active_user: bool,
     device_name: str | None = None,
     permission: str | None = None,
+    require_consent_for_relay: bool = True,
 ) -> dict[str, Any]:
     """Decide whether a connection should be allowed, denied, or require consent.
 
@@ -48,10 +49,20 @@ def evaluate_connection_policy(
         }
 
     if trusted_device and normalized_source == "relay":
+        if require_consent_for_relay:
+            return {
+                "decision": "require_consent",
+                "requires_consent": True,
+                "reason": "Relay connections require explicit consent by default policy.",
+                "source": normalized_source,
+                "trusted_device": True,
+                "device_name": device_name,
+                "permission": permission or "control",
+            }
         return {
             "decision": "allow",
             "requires_consent": False,
-            "reason": "Trusted relay device already paired",
+            "reason": "Trusted relay device with unattended access",
             "source": normalized_source,
             "trusted_device": True,
             "device_name": device_name,

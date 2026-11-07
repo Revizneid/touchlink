@@ -6,11 +6,15 @@
 <meta name="theme-color" content="#071426">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TouchLink">
+<meta name="format-detection" content="telephone=no">
 <meta name="mobile-web-app-capable" content="yes">
 <title>TouchLink Remote</title>
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="icon" href="/static/icons/icon-192.png">
 <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" sizes="192x192" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" sizes="512x512" href="/static/icons/icon-512.png">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -50,6 +54,7 @@
       </label>
       <label class="check-row"><input type="checkbox" id="f-remember" checked><span>Ghi nhớ mật khẩu trên máy này</span></label>
       <button id="btn-connect" class="btn primary" type="submit">Kết nối</button>
+      <button id="btn-wol" class="btn" type="button" style="margin-top:8px;background:transparent;border:1px solid #244269;color:#F3F7FF">⚡ Đánh thức máy từ xa (WoL)</button>
     </form>
     <div id="login-error" class="error" hidden></div>
     <p class="hint">Điện thoại và máy tính cùng Wi-Fi, hoặc dùng địa chỉ relay để kết nối qua internet. Mở app TouchLink trên máy tính để xem ID + mật khẩu.</p>
@@ -59,12 +64,15 @@
 
 <!-- ===== MÀN HÌNH XEM & ĐIỀU KHIỂN ===== -->
 <div id="viewer" class="screen hidden">
+  <video id="rtc-video" class="hidden" autoplay playsinline muted></video>
   <canvas id="screen"></canvas>
 
   <div id="topbar">
     <button class="tb" id="btn-exit" title="Ngắt kết nối">✕</button>
     <div id="status" title="Trạng thái">…</div>
     <div class="grow"></div>
+    <button class="tb" id="btn-audio" title="Bật/Tắt âm thanh máy tính">🔇</button>
+    <button class="tb" id="btn-role" title="Vai trò: 👑 Điều khiển / 👁 Chỉ xem (bấm để xin quyền)">👑</button>
     <button class="tb" id="btn-mode" title="Chế độ chuột: trực tiếp / touchpad">🖱</button>
     <button class="tb" id="btn-keys" title="Bàn phím">⌨</button>
     <button class="tb" id="btn-quick" title="Phím tắt">⊞</button>
@@ -80,6 +88,7 @@
       <span class="qk-sep"></span>
       <button class="qk" data-key="escape">Esc</button>
       <button class="qk" data-key="tab">Tab</button>
+      <button class="qk" data-key="space">Space</button>
       <button class="qk" data-key="enter">Enter</button>
       <button class="qk" data-key="backspace">⌫</button>
       <button class="qk" data-key="up">↑</button>
@@ -89,6 +98,10 @@
       <button class="qk" data-key="delete">Del</button>
     </div>
     <div class="qk-row">
+      <button class="qk" data-combo="ctrl+c">Copy</button>
+      <button class="qk" data-combo="ctrl+v">Paste</button>
+      <button class="qk" data-combo="ctrl+a">All</button>
+      <span class="qk-sep"></span>
       <button class="qk" data-combo="alt+tab">Alt+Tab</button>
       <button class="qk" data-combo="win+d">Win+D</button>
       <button class="qk" data-combo="win+e">Win+E</button>
@@ -132,6 +145,7 @@
         </select></div>
       <div class="set-row"><span>Đồng bộ clipboard</span><input type="checkbox" id="s-cbsync"></div>
       <div class="set-row"><span>Ngăn máy tính tự sleep</span><input type="checkbox" id="s-awake"></div>
+      <div class="set-row"><span>Âm thanh máy tính (WASAPI)</span><input type="checkbox" id="s-audio"></div>
       <div class="btn-row">
         <button class="btn" id="btn-fullscreen">Toàn màn hình</button>
         <button class="btn" id="btn-reconnect">Kết nối lại</button>
@@ -139,6 +153,7 @@
       <div class="btn-row">
         <button class="btn" id="btn-clip">📋 Clipboard</button>
         <button class="btn" id="btn-chat">💬 Trò chuyện</button>
+        <button class="btn" id="btn-file">📁 Gửi file</button>
       </div>
       <div class="meta" id="conn-meta"></div>
       <div class="meta">TouchLink — phát triển bởi Revizneid · <a href="https://github.com/Revizneid/touchlink" target="_blank" rel="noopener" style="color:var(--acc)">GitHub</a></div>
@@ -170,6 +185,27 @@
     </div>
   </div>
 
+  <!-- Panel truyền file -->
+  <div id="filepanel" class="panel hidden">
+    <div class="panel-head"><b>📁 Gửi file tới máy tính</b><button class="tb" id="filepanel-close">✕</button></div>
+    <div class="panel-body">
+      <div id="file-dropzone" class="file-dropzone">
+        <p style="margin-bottom:12px;font-size:13px;color:var(--dim)">Chọn file từ điện thoại để gửi vào thư mục Downloads của máy tính.</p>
+        <input type="file" id="file-input" style="display:none">
+        <button type="button" class="btn primary" id="btn-browse-file">📂 Chọn file…</button>
+      </div>
+      <div id="file-info" class="file-info hidden" style="margin-top:14px">
+        <div id="file-name" style="font-weight:600;word-break:break-all"></div>
+        <div id="file-size" style="font-size:12px;color:var(--dim);margin:4px 0 8px"></div>
+        <div class="progress-bar" style="height:8px;background:var(--elev);border-radius:4px;overflow:hidden;margin-bottom:8px">
+          <div id="file-progress-fill" style="height:100%;width:0%;background:var(--prim);transition:width 0.15s ease"></div>
+        </div>
+        <div id="file-status" style="font-size:12px;color:var(--dim);margin-bottom:10px">Sẵn sàng</div>
+        <button type="button" class="btn primary" id="btn-start-upload" style="width:100%">⬆ Bắt đầu gửi</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" hidden></div>
   <div id="lost" class="lost hidden">
     <div class="lost-card">
@@ -181,6 +217,11 @@
 
 <script>
 window.addEventListener('DOMContentLoaded', function(){
+  var c = document.createElement('script');
+  c.type = 'module';
+  c.src = '/static/crypto.js?v=1';
+  document.body.appendChild(c);
+
   var s = document.createElement('script');
   s.src = '/static/app.js?v=1';
   document.body.appendChild(s);

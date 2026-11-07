@@ -28,12 +28,30 @@ jobs:
       - name: Install build tooling
         run: |
           python -m pip install --upgrade pip
-          pip install build wheel
+          pip install build wheel pyinstaller
           pip install -r desktop/requirements.txt
+          pip install pytest pytest-asyncio
 
       - name: Run test suite
         run: pytest tests/ -q --tb=short
 
+      # --- PyInstaller builds ---
+      - name: Build TouchLink.exe (PyInstaller)
+        run: pyinstaller TouchLink.spec --noconfirm --clean
+
+      - name: Build TouchLinkSvc.exe (PyInstaller)
+        run: pyinstaller TouchLinkSvc.spec --noconfirm --clean
+
+      - name: Verify exe size < 35 MB
+        run: |
+          $exe = Get-Item "dist\TouchLink.exe"
+          $sizeMB = [math]::Round($exe.Length / 1MB, 2)
+          Write-Output "TouchLink.exe size: $sizeMB MB"
+          if ($sizeMB -gt 35) {
+            throw "EXE too large: $sizeMB MB > 35 MB limit"
+          }
+
+      # --- Wheel + portable archive ---
       - name: Build wheel and source archive
         run: python -m build
 
@@ -43,10 +61,24 @@ jobs:
           $version = $env:GITHUB_REF_NAME.TrimStart("v")
           $dist = "dist/TouchLink-$version-windows-portable"
           New-Item -ItemType Directory -Path $dist -Force | Out-Null
-          Copy-Item -Recurse -Force "desktop\*" $dist
+          Copy-Item "dist\TouchLink.exe" $dist
+          Copy-Item "dist\TouchLinkSvc.exe" $dist
           if (Test-Path "README.md") { Copy-Item "README.md" $dist }
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" $dist }
           Compress-Archive -Path "$dist\*" -DestinationPath "dist/TouchLink-$version-windows-portable.zip" -Force
 
+      # --- Inno Setup installer ---
+      - name: Build installer (Inno Setup)
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $iscc) {
+            & $iscc "installers\TouchLink.iss"
+            Copy-Item "installers\Output\*.exe" "dist\"
+          } else {
+            Write-Output "::warning::Inno Setup not found — skipping installer build"
+          }
+
+      # --- Checksums & SBOM ---
       - name: Generate SHA256SUMS
         run: |
           $ErrorActionPreference = "Stop"
@@ -57,6 +89,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           python -c "from pathlib import Path; from desktop.release import build_release_manifest; manifest = build_release_manifest('0.0.0', [str(p) for p in sorted(Path('dist').glob('*'))], project_name='TouchLink'); Path('dist/sbom.json').write_text(manifest['sbom_json'], encoding='utf-8')"
 
+      # --- Code signing ---
       - name: Sign artifacts when certificate is available
         if: ${{ env.HAVE_CERT == 'true' }}
         env:
@@ -72,13 +105,23 @@ jobs:
           }
           Write-Output "Signing artifacts with provided certificate."
 
+      # --- Publish ---
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*
           body: |
-            ${{ env.HAVE_CERT == 'true' && 'This release was code-signed using the configured certificate.' || 'This release is intentionally unsigned because no code-signing certificate was configured in repository secrets.' }}
+            ## TouchLink v${{ github.ref_name }}
+
+            ${{ env.HAVE_CERT == 'true' && '✅ This release was code-signed.' || '⚠️ This release is unsigned (no certificate configured).' }}
+
+            ### Downloads
+            - **TouchLink.exe** — Portable single-file app
+            - **TouchLink-*-Setup.exe** — Windows installer
+            - **TouchLink-*-portable.zip** — Portable archive with service
+
+            See CHANGELOG.md for full release notes.
           generate_release_notes: true
           draft: false
           prerelease: false

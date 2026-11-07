@@ -1,13 +1,16 @@
 /* TouchLink service worker — network-first cho code, fallback cache khi offline */
-var CACHE = 'touchlink-v2';
-var ICONS = [
+var CACHE = 'touchlink-v3';
+var STATIC_ASSETS = [
   '/static/icons/icon-192.png',
   '/static/icons/icon-512.png',
-  '/static/manifest.webmanifest'
+  '/static/manifest.webmanifest',
+  '/static/style.css',
+  '/static/app.js',
+  '/static/crypto.js'
 ];
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) {
-    return Promise.all(ICONS.map(function (a) {
+    return Promise.all(STATIC_ASSETS.map(function (a) {
       return c.add(a).catch(function () {});
     }));
   }).then(function () { return self.skipWaiting(); }));

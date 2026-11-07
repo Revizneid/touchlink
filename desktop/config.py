@@ -6,7 +6,7 @@ import sys
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(APP_DIR)
-VERSION = "2.3.0"
+VERSION = "3.0.0"
 DEFAULT_PORT = 8420
 
 # Khi chạy dạng exe đóng gói (PyInstaller): config.json nằm CẠNH file exe (portable)
@@ -25,6 +25,8 @@ DEFAULTS = {
     "allow_fixed_password": False,
     "one_time_passcode_ttl_s": 600,
     "one_time_passcode_length": 10,
+    "remote_unlock_enabled": False,
+    "audio_enabled": False,
 }
 
 

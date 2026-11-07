@@ -175,6 +175,8 @@ class RelayState:
         self.cfg = cfg
         # agents: device_id -> {"ws", "viewer", "bound", "device", "ip"}
         self.agents: dict[str, dict[str, Any]] = {}
+        # Lưu MAC address của máy: device_id -> mac_address (hỗ trợ WoL)
+        self.device_macs: dict[str, str] = {}
         # Kết nối đồng thời / IP
         self.active_conns: dict[str, int] = {}
 
@@ -183,6 +185,7 @@ class RelayState:
         self.rl_connect_ip = SlidingWindow(cfg.max_conn_id, 60)   # connect/phút/IP
         self.rl_connect_id = SlidingWindow(cfg.max_conn_total, 60) # connect/phút/ID
         self.rl_auth_fail = SlidingWindow(cfg.max_auth_fail, cfg.auth_window_s)
+        self.rl_wol_ip = SlidingWindow(10, 60)                    # max 10 WoL requests/phút/IP
 
         self.bans = BanList()
 
@@ -315,6 +318,23 @@ async def _unavailable_delay() -> None:
     await asyncio.sleep(random.uniform(0.05, 0.15))
 
 
+def _send_wol_packet(mac_address: str, broadcast_ip: str = "255.255.255.255", port: int = 9) -> bool:
+    """Gửi UDP magic packet đánh thức máy tính theo MAC address."""
+    import socket
+    try:
+        clean = re.sub(r"[^0-9A-Fa-f]", "", str(mac_address))
+        if len(clean) != 12:
+            return False
+        b_mac = bytes.fromhex(clean)
+        packet = b"\xff" * 6 + b_mac * 16
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            s.sendto(packet, (str(broadcast_ip), int(port)))
+        return True
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # WebSocket handler chính
 # ---------------------------------------------------------------------------
@@ -393,6 +413,9 @@ async def ws_handler(
                              ip=ip, device_id=did)
                         continue
                     device_id = did
+                    mac = str(data.get("mac_address") or "").strip()
+                    if mac:
+                        state.device_macs[did] = mac
                     rec = {
                         "ws": ws, "viewer": None, "bound": False,
                         "device": did, "ip": ip,
@@ -403,6 +426,54 @@ async def ws_handler(
                     await _try_send(ws, {"type": "registered"})
                     _log(logger, "INFO", "agent_registered", ip=ip,
                          device_id=did)
+
+                # ── WAKE-ON-LAN REQUEST ────────────────────────────────────
+                elif t == "wake_request":
+                    did = str(data.get("device_id") or "").strip()
+                    mac = str(data.get("target_mac") or "").strip()
+                    if not mac and did in state.device_macs:
+                        mac = state.device_macs[did]
+
+                    if not state.rl_wol_ip.hit(ip):
+                        await _try_send(ws, {
+                            "type": "wake_result",
+                            "ok": False,
+                            "message": "Quá nhiều yêu cầu WoL — thử lại sau 1 phút",
+                        })
+                        continue
+
+                    clean_mac = re.sub(r"[^0-9A-Fa-f]", "", mac)
+                    if len(clean_mac) != 12:
+                        await _try_send(ws, {
+                            "type": "wake_result",
+                            "ok": False,
+                            "message": "Địa chỉ MAC không hợp lệ hoặc máy chưa từng đăng ký MAC",
+                        })
+                        continue
+
+                    # 1. Phát trực tiếp magic packet qua UDP từ relay
+                    _send_wol_packet(mac)
+
+                    # 2. Forward yêu cầu tới các agent khác đang online để phát tán magic packet nội bộ LAN
+                    forwarded_agents = 0
+                    for a_did, a_rec in list(state.agents.items()):
+                        if a_did != did and a_rec.get("ws") and not a_rec["ws"].closed:
+                            await _try_send(a_rec["ws"], {
+                                "type": "send_wol",
+                                "target_mac": mac,
+                                "device_id": did,
+                            })
+                            forwarded_agents += 1
+
+                    _log(logger, "INFO", "wol_sent", ip=ip, device_id=did, mac=mac, forwarded=forwarded_agents)
+                    await _try_send(ws, {
+                        "type": "wake_result",
+                        "ok": True,
+                        "device_id": did,
+                        "target_mac": mac,
+                        "forwarded_agents": forwarded_agents,
+                        "message": f"Đã phát gói Magic Packet WoL tới {mac}",
+                    })
 
                 # ── CONNECT (viewer) ──────────────────────────────────────
                 elif t == "connect" and role is None:
@@ -631,6 +702,49 @@ def make_app(args: argparse.Namespace) -> web.Application:
                 1 for r in state.agents.values() if r.get("viewer")
             ),
         })
+
+    # /api/wake — HTTP WoL trigger
+    @routes.post("/api/wake")
+    @routes.get("/api/wake")
+    async def api_wake(request: web.Request) -> web.Response:
+        ip = get_peer_ip(request, cfg.trusted_proxy, cfg.anonymize_logs)
+        if not state.rl_wol_ip.hit(ip):
+            return web.json_response({"ok": False, "message": "Rate limited"}, status=429)
+        did = ""
+        mac = ""
+        if request.method == "POST":
+            try:
+                body = await request.json()
+                did = str(body.get("device_id") or "").strip()
+                mac = str(body.get("target_mac") or "").strip()
+            except Exception:
+                pass
+        else:
+            did = str(request.query.get("device_id") or "").strip()
+            mac = str(request.query.get("mac") or "").strip()
+
+        if not mac and did in state.device_macs:
+            mac = state.device_macs[did]
+
+        clean_mac = re.sub(r"[^0-9A-Fa-f]", "", mac)
+        if len(clean_mac) != 12:
+            return web.json_response({"ok": False, "message": "Invalid MAC address"}, status=400)
+
+        _send_wol_packet(mac)
+        forwarded = 0
+        for a_did, a_rec in list(state.agents.items()):
+            if a_did != did and a_rec.get("ws") and not a_rec["ws"].closed:
+                await _try_send(a_rec["ws"], {"type": "send_wol", "target_mac": mac, "device_id": did})
+                forwarded += 1
+
+        return web.json_response({
+            "ok": True,
+            "device_id": did,
+            "target_mac": mac,
+            "forwarded_agents": forwarded,
+            "message": f"Đã phát gói Magic Packet WoL tới {mac}",
+        })
+
 
     routes.get("/ws")(_ws)
 

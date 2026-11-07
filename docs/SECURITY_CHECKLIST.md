@@ -8,8 +8,8 @@
 - [x] Consent and view-only controls are enforced before granting remote control.
 - [x] Audit logging records events without leaking sensitive content.
 - [x] Pipe operations are restricted to an explicit allowlist.
-- [ ] Windows service should be hardened with process validation and a restrictive ACL on the named pipe.
-- [ ] Remote unlock features remain disabled by default and emit audit records when enabled.
+- [x] Windows service should be hardened with process validation and a restrictive ACL on the named pipe.
+- [x] Remote unlock features remain disabled by default and emit audit records when enabled.
 - [ ] Bandit and pip-audit should be run in CI before release.
 
 ## Current status

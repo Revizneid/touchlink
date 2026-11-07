@@ -12,12 +12,14 @@
   --warn: #f5b942;
   --err: #f97066;
 }
+html { -webkit-text-size-adjust: 100%; }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 body {
   background: var(--bg); color: var(--text);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none;
   overscroll-behavior: none;
 }
 .hidden { display: none !important; }
@@ -67,12 +69,22 @@ h1 { margin: 0; font-size: 22px; }
 .credit a:active { opacity: .7; }
 
 /* ===== VIEWER ===== */
-#viewer { background: #000; }
-#screen { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+#viewer { background: #000; -webkit-touch-callout: none; }
+#screen {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  touch-action: none; z-index: 2; background: transparent;
+  -webkit-touch-callout: none;
+}
+#rtc-video {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; background: #000; z-index: 1;
+  -webkit-touch-callout: none;
+}
 
 #topbar {
   position: absolute; top: env(safe-area-inset-top, 0); left: 0; right: 0;
-  display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px max(8px, env(safe-area-inset-right, 0)) 6px max(8px, env(safe-area-inset-left, 0));
   background: linear-gradient(rgba(5,10,20,.85), rgba(5,10,20,0));
   z-index: 20; transition: opacity .3s;
 }
@@ -91,7 +103,8 @@ h1 { margin: 0; font-size: 22px; }
 #quickkeys {
   position: absolute; left: 0; right: 0; bottom: env(safe-area-inset-bottom, 0);
   z-index: 20; background: rgba(10,16,30,.94); border-top: 1px solid var(--line);
-  padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0));
+  padding: 6px max(6px, env(safe-area-inset-right, 0)) calc(6px + env(safe-area-inset-bottom, 0)) max(6px, env(safe-area-inset-left, 0));
+  -webkit-touch-callout: none;
 }
 .qk-row { display: flex; gap: 6px; overflow-x: auto; padding: 3px 2px; }
 .qk {
@@ -144,6 +157,11 @@ h1 { margin: 0; font-size: 22px; }
 .chat-msg b { color: var(--acc); font-size: 12px; display: block; }
 .chat-input-row { display: flex; gap: 8px; }
 .chat-input-row input { flex: 1; }
+
+.file-dropzone {
+  border: 2px dashed var(--line); border-radius: 12px; padding: 18px 12px;
+  text-align: center; background: rgba(20,43,76,0.3);
+}
 
 #toast {
   position: absolute; left: 50%; transform: translateX(-50%);

@@ -24,7 +24,11 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from desktop.security.service_hardening import sanitize_pipe_operation
+from desktop.security.service_hardening import (
+    build_pipe_sddl,
+    sanitize_pipe_operation,
+    validate_pipe_client,
+)
 
 PIPE_NAME = r'\\.\pipe\TouchLinkSvc'
 
@@ -174,8 +178,58 @@ def _read_exact(h, n):
     return out
 
 
+def _get_pipe_client_exe(pipe_handle) -> str | None:
+    """Lấy đường dẫn file thực thi của tiến trình client gọi pipe."""
+    if not _win:
+        return None
+    try:
+        pid = ctypes.c_ulong(0)
+        h = int(pipe_handle)
+        if hasattr(ctypes.windll.kernel32, "GetNamedPipeClientProcessId"):
+            if ctypes.windll.kernel32.GetNamedPipeClientProcessId(h, ctypes.byref(pid)):
+                client_pid = pid.value
+                if client_pid:
+                    try:
+                        import psutil
+                        return psutil.Process(client_pid).exe()
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return None
+
+
+def _get_pipe_security_attributes():
+    """Tạo SECURITY_ATTRIBUTES từ SDDL hạn chế chỉ cho SYSTEM + Admins."""
+    if not _win:
+        return None
+    try:
+        import win32security
+        sddl = build_pipe_sddl()
+        sec_desc = win32security.ConvertStringSecurityDescriptorToSecurityDescriptor(
+            sddl, win32security.SDDL_REVISION_1
+        )
+        sa = win32security.SECURITY_ATTRIBUTES()
+        sa.SECURITY_DESCRIPTOR = sec_desc
+        return sa
+    except Exception:
+        return None
+
+
 def _handle_conn(pipe, worker, safe_test):
     try:
+        # Xác thực caller PID & exe
+        client_exe = _get_pipe_client_exe(pipe)
+        if client_exe:
+            install_root = os.path.dirname(os.path.abspath(__file__))
+            if not validate_pipe_client(
+                client_exe_path=client_exe,
+                install_root=install_root,
+                allowed_basenames={"touchlink.exe", "touchlinksvc.exe", "python.exe", "pythonw.exe"},
+            ):
+                win32file.WriteFile(pipe, _resp_json({"ok": False, "error": "untrusted pipe client"}))
+                return
+
         raw = b""
         while not raw.endswith(b"\n"):
             chunk = win32file.ReadFile(pipe, 65536)[1]
@@ -214,6 +268,14 @@ def _handle_conn(pipe, worker, safe_test):
                                                       "error": str(e)}))
 
         elif t == "input":
+            # Kiểm tra chính sách remote unlock khi màn hình khóa
+            cfg = _cfg.load()
+            if is_locked() and not cfg.get("remote_unlock_enabled", False):
+                win32file.WriteFile(pipe, _resp_json({
+                    "ok": False,
+                    "error": "remote unlock is disabled by policy",
+                }))
+                return
             worker.post(op)
             win32file.WriteFile(pipe, _resp_json({"ok": True}))
         else:
@@ -230,13 +292,26 @@ def _handle_conn(pipe, worker, safe_test):
 
 
 def serve_pipes(stop_evt, worker, safe_test):
+    sa = _get_pipe_security_attributes()
+    reject_remote = getattr(win32pipe, "PIPE_REJECT_REMOTE_CLIENTS", 0x00000008)
+    pipe_mode = (
+        win32pipe.PIPE_TYPE_BYTE
+        | win32pipe.PIPE_READMODE_BYTE
+        | win32pipe.PIPE_WAIT
+        | reject_remote
+    )
     while not stop_evt.is_set():
         try:
             pipe = win32pipe.CreateNamedPipe(
-                PIPE_NAME, win32pipe.PIPE_ACCESS_DUPLEX,
-                win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE
-                | win32pipe.PIPE_WAIT,
-                win32pipe.PIPE_UNLIMITED_INSTANCES, 1024 * 1024, 1024 * 1024, 0, None)
+                PIPE_NAME,
+                win32pipe.PIPE_ACCESS_DUPLEX,
+                pipe_mode,
+                win32pipe.PIPE_UNLIMITED_INSTANCES,
+                1024 * 1024,
+                1024 * 1024,
+                0,
+                sa,
+            )
         except Exception:
             time.sleep(2)
             continue
@@ -244,6 +319,8 @@ def serve_pipes(stop_evt, worker, safe_test):
             win32pipe.ConnectNamedPipe(pipe, None)
         except pywintypes.error:
             pass  # client đã connect trước khi ConnectNamedPipe gọi
+        threading.Thread(target=_handle_conn, args=(pipe, worker, safe_test),
+                         daemon=True).start()
         threading.Thread(target=_handle_conn, args=(pipe, worker, safe_test),
                          daemon=True).start()
 

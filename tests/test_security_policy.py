@@ -18,6 +18,25 @@ def test_connection_policy_matrix():
     assert trusted_lan["decision"] == "allow"
     assert trusted_lan["requires_consent"] is False
 
+    trusted_relay = evaluate_connection_policy(
+        trusted_device=True,
+        source="relay",
+        is_relay=True,
+        active_user=True,
+    )
+    assert trusted_relay["decision"] == "require_consent"
+    assert trusted_relay["requires_consent"] is True
+
+    trusted_relay_unattended = evaluate_connection_policy(
+        trusted_device=True,
+        source="relay",
+        is_relay=True,
+        active_user=True,
+        require_consent_for_relay=False,
+    )
+    assert trusted_relay_unattended["decision"] == "allow"
+    assert trusted_relay_unattended["requires_consent"] is False
+
     untrusted_relay = evaluate_connection_policy(
         trusted_device=False,
         source="relay",

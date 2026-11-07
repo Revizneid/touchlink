@@ -14,9 +14,9 @@ var el = {
   host: $('f-host'), fid: $('f-id'), fpass: $('f-pass'), fremember: $('f-remember'),
   segDirect: $('seg-direct'), segRelay: $('seg-relay'), modeSeg: $('mode-seg'),
   fieldHost: $('field-host'), fieldRelay: $('field-relay'), fRelay: $('f-relay'),
-  btnConnect: $('btn-connect'), loginError: $('login-error'),
-  canvas: $('screen'), topbar: $('topbar'), status: $('status'),
-  btnExit: $('btn-exit'), btnMode: $('btn-mode'), btnKeys: $('btn-keys'),
+  btnConnect: $('btn-connect'), btnWol: $('btn-wol'), loginError: $('login-error'),
+  canvas: $('screen'), rtcVideo: $('rtc-video'), topbar: $('topbar'), status: $('status'),
+  btnExit: $('btn-exit'), btnAudio: $('btn-audio'), btnRole: $('btn-role'), btnMode: $('btn-mode'), btnKeys: $('btn-keys'),
   btnQuick: $('btn-quick'), btnMenu: $('btn-menu'),
   quickkeys: $('quickkeys'), scrollstrip: $('scrollstrip'), ime: $('ime'),
   sheet: $('sheet'), sheetClose: $('sheet-close'),
@@ -27,8 +27,12 @@ var el = {
   toast: $('toast'), lost: $('lost'), lostMsg: $('lost-msg'), btnRelogin: $('btn-relogin'),
   sQuality: $('s-quality'), sFps: $('s-fps'), sScale: $('s-scale'), sMonitor: $('s-monitor'),
   sMode: $('s-mode'), sSens: $('s-sens'), sInvert: $('s-invert'), s2: $('s-2finger'),
-  sCbsync: $('s-cbsync'), sAwake: $('s-awake'), btnFullscreen: $('btn-fullscreen'), btnReconnect: $('btn-reconnect'),
+  sCbsync: $('s-cbsync'), sAwake: $('s-awake'), sAudio: $('s-audio'), btnFullscreen: $('btn-fullscreen'), btnReconnect: $('btn-reconnect'),
   btnClip: $('btn-clip'), btnChat: $('btn-chat'), connMeta: $('conn-meta'),
+  btnFile: $('btn-file'), filePanel: $('filepanel'), filePanelClose: $('filepanel-close'),
+  fileInput: $('file-input'), btnBrowseFile: $('btn-browse-file'), fileInfo: $('file-info'),
+  fileName: $('file-name'), fileSize: $('file-size'), fileProgressFill: $('file-progress-fill'),
+  fileStatus: $('file-status'), btnStartUpload: $('btn-start-upload'),
   vQuality: $('v-quality'), vFps: $('v-fps'), vScale: $('v-scale'), vSens: $('v-sens')
 };
 
@@ -56,9 +60,17 @@ var st = {
   resumeDeviceId: localStorage.getItem('tl_resumeDeviceId') || '',
   reconnectDelayMs: 1500,
   reconnectAttempt: 0,
+  role: 'controller', isController: true, viewers: [],
   wakeLock: null,
   // Tile state: canvas chứa full screenshot (vẽ tile lên trên)
   tileCanvas: null, tileCtx: null,
+  // E2E state
+  e2eKey: null, e2eRawKey: null, e2eTranscript: null,
+  e2eCounter: 0, e2eLastRecv: 0, e2eActive: false, e2eFingerprint: '',
+  // File transfer state
+  currentFileTransfer: null,
+  // WebRTC state
+  rtcPc: null, rtcDc: null, rtcActive: false,
 };
 var bmp = null, redrawNeeded = false;
 var frameCount = 0, fpsShown = 0, pingMs = 0, eventCount = 0;
@@ -128,6 +140,41 @@ function bindViewportCompat() {
   }
   window.addEventListener('resize', applyViewportCompat);
   window.addEventListener('orientationchange', applyViewportCompat);
+
+  // iOS Safari: Chặn pinch-zoom và double-tap zoom ngoài ý muốn ở cấp trang
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (evName) {
+    document.addEventListener(evName, function (e) {
+      e.preventDefault();
+    }, { passive: false });
+  });
+
+  // Chặn cuộn elastic bounce kéo trang khi chạm vào màn hình điều khiển
+  document.addEventListener('touchmove', function (e) {
+    if (e.target === el.canvas || e.target === el.rtcVideo || (e.target.closest && e.target.closest('#viewer'))) {
+      if (!e.target.closest || (!e.target.closest('.panel-body') && !e.target.closest('#chat-list'))) {
+        e.preventDefault();
+      }
+    }
+  }, { passive: false });
+
+  // Chặn double-tap zoom trên canvas
+  var lastCanvasTap = 0;
+  document.addEventListener('touchend', function (e) {
+    var now = Date.now();
+    if (now - lastCanvasTap <= 300 && (e.target === el.canvas || e.target === el.rtcVideo)) {
+      e.preventDefault();
+    }
+    lastCanvasTap = now;
+  }, { passive: false });
+
+  // Mở khóa âm thanh / video playback trên iOS Safari ngay từ tương tác đầu tiên
+  function unlockMediaIOS() {
+    if (el.rtcVideo && el.rtcVideo.paused) {
+      el.rtcVideo.play().catch(function () {});
+    }
+  }
+  document.addEventListener('touchstart', unlockMediaIOS, { once: true, passive: true });
+  document.addEventListener('click', unlockMediaIOS, { once: true, passive: true });
 }
 
 function wsUrlFromHost(h) {
@@ -348,16 +395,50 @@ function connect(hostStr, id, pass) {
     var msg = buildAuthMessage(id, pass, mode);
     ws.send(JSON.stringify(msg));
   };
-  ws.onmessage = function (ev) {
+  ws.onmessage = async function (ev) {
     if (ev.data instanceof ArrayBuffer) { onFrame(ev.data); return; }
     var m;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m.type === 'e2e' && st.e2eActive && st.e2eKey && window.TouchLinkCrypto) {
+      try {
+        var bin = atob(m.c);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        var dec = await window.TouchLinkCrypto.decryptE2E(
+          st.e2eKey, st.e2eRawKey, st.e2eTranscript, st.e2eLastRecv || 0, bytes
+        );
+        st.e2eLastRecv = dec.counter;
+        m = JSON.parse(dec.text);
+      } catch (e2eErr) {
+        console.error('Relay E2E giải mã thất bại:', e2eErr);
+        return;
+      }
+    }
     if (m.type === 'auth_ok' || (m.type === 'auth_result' && m.ok)) {
       clearTimeout(authTimer);
       if (isRelay) wakeup.onAuthedOk();
       var d = m.type === 'auth_ok' ? m : (m.data || {});
+      // Khởi tạo kênh E2E nếu server bật
+      if (d.e2e && window.TouchLinkCrypto && st.cred && st.cred.pass) {
+        var transcript = d.transcript || ('touchlink-relay:' + (st.cred.id || ''));
+        window.TouchLinkCrypto.setupE2EKey(st.cred.pass, transcript).then(function (res) {
+          st.e2eKey = res.key;
+          st.e2eRawKey = res.rawKey;
+          st.e2eTranscript = res.transcriptBytes;
+          st.e2eCounter = 0;
+          st.e2eLastRecv = 0;
+          st.e2eActive = true;
+          st.e2eFingerprint = d.e2e_fingerprint || '';
+          if (st.e2eFingerprint) {
+            toast('🔒 E2E mã hóa bảo mật (Mã: ' + st.e2eFingerprint + ')', 5000);
+            updateMeta();
+          }
+        }).catch(function (err) {
+          console.error('Khởi tạo E2E thất bại:', err);
+        });
+      }
       // Gửi hello ngược ngay sau khi xác thực thành công
-      ws.send(JSON.stringify({ type: 'hello', v: PROTOCOL_VERSION, caps: PROTOCOL_CAPS }));
+      send({ type: 'hello', v: PROTOCOL_VERSION, caps: PROTOCOL_CAPS });
       onAuthed(d);
     } else if (m.type === 'hello') {
       // Nhận hello từ agent — ghi nhận phiên bản để dùng sau
@@ -367,12 +448,35 @@ function connect(hostStr, id, pass) {
       clearTimeout(authTimer);
       if (isRelay) wakeup.onAuthedOk();  // dừng retry (lỗi auth ≠ relay ngủ)
       st.resumeToken = '';
+      st.e2eActive = false;
+      st.e2eKey = null;
       localStorage.removeItem('tl_resumeToken');
       localStorage.removeItem('tl_resumeDeviceId');
       el.btnConnect.disabled = false;
       el.btnConnect.textContent = 'Kết nối';
       show(el.viewer, false); show(el.login, true);
       loginError((m.message || 'Sai thông tin đăng nhập'));
+    } else if (m.type === 'file_accept') {
+      onFileAccepted(m.id);
+    } else if (m.type === 'file_ack') {
+      onFileAck(m.id, m.seq);
+    } else if (m.type === 'file_done') {
+      onFileDone(m.id);
+    } else if (m.type === 'file_reject') {
+      onFileRejected(m.id, m.reason);
+    } else if (m.type === 'rtc_answer') {
+      if (st.rtcPc && m.sdp) {
+        st.rtcPc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: m.sdp }))
+          .catch(function (e) { console.error('Lỗi setRemoteDescription answer:', e); });
+      }
+    } else if (m.type === 'rtc_ice') {
+      if (st.rtcPc && m.candidate) {
+        st.rtcPc.addIceCandidate(new RTCIceCandidate(m.candidate))
+          .catch(function (e) { console.error('Lỗi addIceCandidate:', e); });
+      }
+    } else if (m.type === 'rtc_error') {
+      console.warn('Máy chủ báo lỗi WebRTC:', m.message);
+      fallbackWebRTC();
     } else if (m.type === 'screen_locked') {
       if (m.locked && m.svc) {
         toast('🔒 Màn hình máy tính đang khóa — đang điều khiển QUA SERVICE: gõ mật khẩu Windows rồi Enter để mở khóa.', 8000);
@@ -391,6 +495,21 @@ function connect(hostStr, id, pass) {
       addChat(m.from || 'PC', m.text || '');
     } else if (m.type === 'clients') {
       st.meta.viewers = m.n; updateMeta();
+    } else if (m.type === 'role') {
+      st.role = m.role || 'viewer';
+      st.isController = !!m.is_controller;
+      st.viewers = m.viewers || [];
+      if (el.btnRole) {
+        show(el.btnRole, true);
+        el.btnRole.textContent = st.isController ? '👑' : '👁';
+        el.btnRole.title = st.isController
+          ? '👑 Bạn là Controller (được phép điều khiển)'
+          : '👁 Bạn đang ở chế độ xem (bấm để xin quyền)';
+      }
+      toast(st.isController ? '👑 Bạn đã có quyền điều khiển' : '👁 Bạn đang ở chế độ xem');
+      updateMeta();
+    } else if (m.type === 'wake_result') {
+      toast(m.ok ? ('⚡ ' + m.message) : ('❌ ' + m.message), 5000);
     }
   };
   ws.onclose = function () {
@@ -468,6 +587,7 @@ function onAuthed(d) {
   frameCount = 0; fpsShown = 0; pingMs = 0;
   toast('Đã kết nối tới ' + (d.hostname || 'máy tính'));
   acquireWakeLock();
+  startWebRTC();
   if ('requestFullscreen' in document.documentElement) { /* không tự mở */ }
 }
 
@@ -501,6 +621,8 @@ function updateMeta() {
   if (st.meta.hostname) bits.push('Máy: ' + st.meta.hostname);
   if (st.meta.device_id) bits.push('ID: ' + st.meta.device_id);
   if (st.meta.viewers != null) bits.push('Người xem: ' + st.meta.viewers);
+  if (st.e2eFingerprint) bits.push('🔒 E2E: ' + st.e2eFingerprint);
+  if (st.rtcActive) bits.push('⚡ WebRTC');
   if (st.meta.version) bits.push('v' + st.meta.version);
   el.connMeta.textContent = bits.join(' · ');
 }
@@ -653,6 +775,11 @@ function onFrame(buf) {
 var ctx = el.canvas.getContext('2d');
 function draw() {
   requestAnimationFrame(draw);
+  if (st.rtcActive) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, vw, vh);
+    return;
+  }
   if (!bmp || !st.fw) return;
   redrawNeeded = false;
   var dpr = window.devicePixelRatio || 1;
@@ -695,8 +822,41 @@ function toImage(cx, cy) {
 }
 
 /* ---------- input sending ---------- */
+var _sendQueue = Promise.resolve();
 function send(o) {
-  if (st.ws && st.ws.readyState === 1) { st.ws.send(JSON.stringify(o)); eventCount++; }
+  if (o && o.type === 'input' && st.rtcActive && st.rtcDc && st.rtcDc.readyState === 'open') {
+    try {
+      st.rtcDc.send(JSON.stringify(o));
+      eventCount++;
+      return;
+    } catch (e) {}
+  }
+  if (!st.ws || st.ws.readyState !== 1) return;
+  eventCount++;
+  if (st.e2eActive && st.e2eKey && window.TouchLinkCrypto) {
+    _sendQueue = _sendQueue.then(async function () {
+      try {
+        st.e2eCounter = (st.e2eCounter || 0) + 1;
+        var jsonStr = JSON.stringify(o);
+        var cipherBytes = await window.TouchLinkCrypto.encryptE2E(
+          st.e2eKey, st.e2eRawKey, st.e2eTranscript, st.e2eCounter, jsonStr
+        );
+        var bin = '';
+        var len = cipherBytes.byteLength;
+        for (var i = 0; i < len; i++) bin += String.fromCharCode(cipherBytes[i]);
+        var b64 = btoa(bin);
+        if (st.ws && st.ws.readyState === 1) {
+          st.ws.send(JSON.stringify({ type: 'e2e', c: b64 }));
+        }
+      } catch (err) {
+        console.error('Lỗi mã hóa E2E:', err);
+      }
+    }).catch(function (err) {
+      console.error('Lỗi hàng đợi gửi:', err);
+    });
+  } else {
+    st.ws.send(JSON.stringify(o));
+  }
 }
 function sendMouse(action, x, y, extra) {
   var o = { type: 'input', kind: 'mouse', action: action, x: (x == null ? null : Math.round(x)), y: (y == null ? null : Math.round(y)) };
@@ -1010,7 +1170,7 @@ el.quickkeys.addEventListener('click', function (e) {
 
 /* ---------- panels ---------- */
 function closePanels(keep) {
-  [el.sheet, el.clip, el.chat].forEach(function (p) { if (p !== keep) show(p, false); });
+  [el.sheet, el.clip, el.chat, el.filePanel].forEach(function (p) { if (p && p !== keep) show(p, false); });
 }
 el.btnMenu.addEventListener('click', function () {
   var willShow = el.sheet.classList.contains('hidden');
@@ -1056,6 +1216,84 @@ el.sAwake.addEventListener('change', function () {
   send({ type: 'settings', settings: { keep_awake: el.sAwake.checked } });
   toast(el.sAwake.checked ? 'Máy tính sẽ không tự sleep khi TouchLink chạy' : 'Đã trả lại chế độ sleep của Windows');
 });
+function setAudioEnabled(enabled) {
+  if (!el.rtcVideo) return;
+  el.rtcVideo.muted = !enabled;
+  if (el.btnAudio) el.btnAudio.textContent = enabled ? '🔊' : '🔇';
+  if (el.sAudio) el.sAudio.checked = enabled;
+  toast(enabled ? '🔊 Đã bật âm thanh máy tính (WASAPI)' : '🔇 Đã tắt âm thanh');
+}
+if (el.btnAudio) {
+  el.btnAudio.addEventListener('click', function () {
+    var currentlyMuted = !el.rtcVideo || el.rtcVideo.muted;
+    setAudioEnabled(currentlyMuted);
+  });
+}
+if (el.sAudio) {
+  el.sAudio.addEventListener('change', function () {
+    setAudioEnabled(el.sAudio.checked);
+  });
+}
+if (el.btnRole) {
+  el.btnRole.addEventListener('click', function () {
+    if (!st.isController) {
+      send({ type: 'request_controller' });
+      toast('Đang xin quyền điều khiển máy tính...', 3000);
+    } else {
+      send({ type: 'release_controller' });
+      toast('Đã nhường quyền điều khiển', 3000);
+    }
+  });
+}
+if (el.btnWol) {
+  el.btnWol.addEventListener('click', async function () {
+    var did = (el.fid && el.fid.value || '').trim();
+    if (!did) {
+      did = prompt('Nhập mã máy (ID gồm 9 chữ số) cần đánh thức:');
+      if (did && el.fid) el.fid.value = did.trim();
+    }
+    if (!did) return;
+
+    var relayUrl = (el.fRelay && el.fRelay.value || DEFAULT_RELAY).trim();
+    toast('⚡ Đang gửi tín hiệu Wake-on-LAN tới relay...', 4000);
+
+    var httpUrl = relayUrl.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/ws$/i, '') + '/api/wake';
+    try {
+      var res = await fetch(httpUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: did })
+      });
+      var json = await res.json();
+      if (json && json.ok) {
+        toast('⚡ ' + (json.message || 'Đã phát gói Magic Packet đánh thức máy! Vui lòng chờ 30-60s rồi kết nối.'), 6000);
+      } else {
+        toast('❌ ' + ((json && json.message) || 'Không thể đánh thức máy qua WoL'), 4000);
+      }
+    } catch (e) {
+      try {
+        var tempWs = new WebSocket(relayUrl);
+        tempWs.onopen = function () {
+          tempWs.send(JSON.stringify({ type: 'wake_request', device_id: did }));
+        };
+        tempWs.onmessage = function (ev) {
+          try {
+            var m = JSON.parse(ev.data);
+            if (m.type === 'wake_result') {
+              toast(m.ok ? ('⚡ ' + m.message) : ('❌ ' + m.message), 6000);
+              tempWs.close();
+            }
+          } catch (err) {}
+        };
+        tempWs.onerror = function () {
+          toast('❌ Không thể kết nối tới Relay để gửi WoL', 4000);
+        };
+      } catch (wsErr) {
+        toast('❌ Lỗi gửi WoL: ' + wsErr.message, 4000);
+      }
+    }
+  });
+}
 function saveClientPrefs() {
   localStorage.setItem('tl_mode', st.mode);
   localStorage.setItem('tl_sens', String(st.sens));
@@ -1094,6 +1332,7 @@ el.btnReconnect.addEventListener('click', function () {
 });
 el.btnExit.addEventListener('click', function () {
   st.closing = true;
+  fallbackWebRTC();
   if (st.ws) { try { st.ws.close(); } catch (e) {} }
   st.authed = false;
   closePanels(null);
@@ -1101,6 +1340,7 @@ el.btnExit.addEventListener('click', function () {
   show(el.viewer, false); show(el.login, true);
 });
 el.btnRelogin.addEventListener('click', function () {
+  fallbackWebRTC();
   show(el.lost, false);
   show(el.viewer, false); show(el.login, true);
 });
@@ -1140,6 +1380,238 @@ function sendChat() {
   if (!t) return;
   send({ type: 'chat', text: t });
   el.chatInput.value = '';
+}
+
+/* ---------- file transfer ---------- */
+var CHUNK_SIZE = 64 * 1024;
+var selectedFile = null;
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function handleFileSelected(file) {
+  if (!file) return;
+  selectedFile = file;
+  el.fileName.textContent = file.name;
+  el.fileSize.textContent = formatBytes(file.size);
+  el.fileProgressFill.style.width = '0%';
+  el.fileStatus.textContent = 'Sẵn sàng gửi';
+  el.fileStatus.style.color = 'var(--dim)';
+  el.btnStartUpload.disabled = false;
+  el.btnStartUpload.textContent = '⬆ Bắt đầu gửi';
+  show(el.fileInfo, true);
+}
+
+async function computeSHA256(arrayBuffer) {
+  var hashBuf = await crypto.subtle.digest('SHA-256', arrayBuffer);
+  var hex = Array.from(new Uint8Array(hashBuf))
+    .map(function (b) { return b.toString(16).padStart(2, '0'); })
+    .join('');
+  return hex;
+}
+
+async function startFileUpload() {
+  if (!selectedFile) return;
+  el.btnStartUpload.disabled = true;
+  el.fileStatus.textContent = 'Đang tính mã băm SHA-256…';
+  el.fileStatus.style.color = 'var(--dim)';
+  try {
+    var buf = await selectedFile.arrayBuffer();
+    var sha256 = await computeSHA256(buf);
+    var transferId = 'tl_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    var totalChunks = Math.ceil(buf.byteLength / CHUNK_SIZE);
+    st.currentFileTransfer = {
+      id: transferId,
+      file: selectedFile,
+      buffer: buf,
+      sha256: sha256,
+      totalChunks: totalChunks,
+      currentSeq: 0,
+      chunkSize: CHUNK_SIZE,
+    };
+    el.fileStatus.textContent = 'Đang xin phép gửi file…';
+    send({
+      type: 'file_offer',
+      id: transferId,
+      name: selectedFile.name,
+      size: selectedFile.size,
+      sha256: sha256,
+      chunk_size: CHUNK_SIZE,
+    });
+  } catch (err) {
+    el.fileStatus.textContent = 'Lỗi đọc file: ' + err.message;
+    el.fileStatus.style.color = '#ef4444';
+    el.btnStartUpload.disabled = false;
+  }
+}
+
+function sendNextChunk() {
+  var ft = st.currentFileTransfer;
+  if (!ft) return;
+  var seq = ft.currentSeq;
+  if (seq >= ft.totalChunks) return;
+  var start = seq * ft.chunkSize;
+  var end = Math.min(start + ft.chunkSize, ft.buffer.byteLength);
+  var slice = ft.buffer.slice(start, end);
+  var isFinal = (seq === ft.totalChunks - 1);
+
+  var bytes = new Uint8Array(slice);
+  var bin = '';
+  var len = bytes.byteLength;
+  for (var i = 0; i < len; i++) bin += String.fromCharCode(bytes[i]);
+  var b64 = btoa(bin);
+
+  send({
+    type: 'file_chunk',
+    id: ft.id,
+    seq: seq,
+    data: b64,
+    final: isFinal,
+  });
+
+  var pct = Math.round(((seq + 1) / ft.totalChunks) * 100);
+  el.fileProgressFill.style.width = pct + '%';
+  el.fileStatus.textContent = 'Đang gửi ' + pct + '% (phần ' + (seq + 1) + '/' + ft.totalChunks + ')';
+}
+
+function onFileAccepted(id) {
+  if (!st.currentFileTransfer || st.currentFileTransfer.id !== id) return;
+  el.fileStatus.textContent = 'Bắt đầu gửi dữ liệu…';
+  sendNextChunk();
+}
+
+function onFileAck(id, seq) {
+  var ft = st.currentFileTransfer;
+  if (!ft || ft.id !== id) return;
+  if (seq === ft.currentSeq) {
+    ft.currentSeq++;
+    if (ft.currentSeq < ft.totalChunks) {
+      sendNextChunk();
+    } else {
+      el.fileStatus.textContent = 'Đang đợi máy tính xác minh & lưu file…';
+    }
+  }
+}
+
+function onFileDone(id) {
+  var ft = st.currentFileTransfer;
+  if (!ft || ft.id !== id) return;
+  el.fileProgressFill.style.width = '100%';
+  el.fileStatus.textContent = '✓ Gửi thành công! File đã lưu vào Downloads trên máy tính.';
+  el.fileStatus.style.color = '#10b981';
+  toast('📁 Đã gửi file thành công vào máy tính!', 4000);
+  st.currentFileTransfer = null;
+  selectedFile = null;
+  el.btnStartUpload.disabled = false;
+  el.btnStartUpload.textContent = '⬆ Gửi file khác';
+}
+
+function onFileRejected(id, reason) {
+  if (!st.currentFileTransfer || st.currentFileTransfer.id !== id) return;
+  el.fileStatus.textContent = '✗ Bị từ chối: ' + (reason || 'lỗi không xác định');
+  el.fileStatus.style.color = '#ef4444';
+  toast('Không thể gửi file: ' + (reason || 'Bị từ chối'), 4000);
+  el.btnStartUpload.disabled = false;
+  st.currentFileTransfer = null;
+}
+
+if (el.btnFile) {
+  el.btnFile.addEventListener('click', function () {
+    var willShow = el.filePanel.classList.contains('hidden');
+    closePanels(willShow ? el.filePanel : null);
+    show(el.filePanel, willShow);
+  });
+}
+if (el.filePanelClose) {
+  el.filePanelClose.addEventListener('click', function () { show(el.filePanel, false); });
+}
+if (el.btnBrowseFile && el.fileInput) {
+  el.btnBrowseFile.addEventListener('click', function () { el.fileInput.click(); });
+  el.fileInput.addEventListener('change', function () {
+    if (el.fileInput.files && el.fileInput.files[0]) {
+      handleFileSelected(el.fileInput.files[0]);
+    }
+  });
+}
+if (el.btnStartUpload) {
+  el.btnStartUpload.addEventListener('click', startFileUpload);
+}
+
+/* ---------- WebRTC pipeline ---------- */
+async function startWebRTC() {
+  if (!window.RTCPeerConnection) return;
+  try {
+    if (st.rtcPc) {
+      try { st.rtcPc.close(); } catch (e) {}
+      st.rtcPc = null;
+    }
+    var config = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ],
+    };
+    var pc = new RTCPeerConnection(config);
+    st.rtcPc = pc;
+
+    // DataChannel cho input điều khiển
+    var dc = pc.createDataChannel('input', { ordered: true });
+    st.rtcDc = dc;
+
+    pc.ontrack = function (ev) {
+      if (ev.streams && ev.streams[0]) {
+        el.rtcVideo.srcObject = ev.streams[0];
+        show(el.rtcVideo, true);
+        st.rtcActive = true;
+        toast('⚡ Luồng WebRTC H.264 độ trễ cực thấp (<100ms)', 3500);
+        updateMeta();
+      }
+    };
+
+    pc.onicecandidate = function (ev) {
+      if (ev.candidate) {
+        send({
+          type: 'rtc_ice',
+          candidate: {
+            candidate: ev.candidate.candidate,
+            sdpMid: ev.candidate.sdpMid,
+            sdpMLineIndex: ev.candidate.sdpMLineIndex,
+          },
+        });
+      }
+    };
+
+    pc.onconnectionstatechange = function () {
+      if (pc.connectionState === 'connected') {
+        st.rtcActive = true;
+        updateMeta();
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        fallbackWebRTC();
+      }
+    };
+
+    var offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: true });
+    await pc.setLocalDescription(offer);
+    send({ type: 'rtc_offer', sdp: offer.sdp });
+  } catch (err) {
+    console.warn('Không thể khởi tạo WebRTC, tiếp tục dùng Canvas JPEG:', err);
+    fallbackWebRTC();
+  }
+}
+
+function fallbackWebRTC() {
+  st.rtcActive = false;
+  if (st.rtcPc) {
+    try { st.rtcPc.close(); } catch (e) {}
+    st.rtcPc = null;
+  }
+  st.rtcDc = null;
+  show(el.rtcVideo, false);
+  redrawNeeded = true;
+  updateMeta();
 }
 
 /* ---------- stats ---------- */

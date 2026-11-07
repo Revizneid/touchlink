@@ -25,8 +25,17 @@ def test_lan_and_relay_transports_expose_basic_api():
     relay.close()
 
 
-def test_webrtc_transport_handles_missing_aiortc_cleanly():
+def test_webrtc_transport_handles_missing_aiortc_cleanly(monkeypatch):
+    monkeypatch.setattr(WebRtcTransport, "is_available", staticmethod(lambda: False))
     transport = WebRtcTransport()
     assert transport.is_available() is False
     with pytest.raises(RuntimeError):
         transport.start()
+
+
+def test_webrtc_transport_when_available():
+    transport = WebRtcTransport()
+    if transport.is_available():
+        assert transport.start() is True
+        assert transport.started is True
+        transport.close()

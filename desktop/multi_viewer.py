@@ -95,6 +95,30 @@ class MultiViewerSession:
                 break
         return True
 
+    def unregister_viewer(self, viewer_id: str) -> bool:
+        vid = str(viewer_id)
+        before_len = len(self.viewers)
+        self.viewers = [v for v in self.viewers if str(v.get("id")) != vid]
+        if len(self.viewers) == before_len:
+            return False
+        if self.controller == vid:
+            if self.viewers:
+                self.controller = str(self.viewers[0]["id"])
+                self.viewers[0]["role"] = "controller"
+            else:
+                self.controller = None
+        return True
+
+    def get_role(self, viewer_id: str) -> str:
+        vid = str(viewer_id)
+        for v in self.viewers:
+            if str(v.get("id")) == vid:
+                return str(v.get("role", "viewer"))
+        return "viewer"
+
+    def list_viewers(self) -> list[dict[str, Any]]:
+        return [dict(v) for v in self.viewers]
+
     def can_send_input(self, viewer_id: str) -> bool:
         if not self.controller:
             return True

@@ -7,13 +7,159 @@ works even when real audio libraries are absent in CI or local developer shells.
 
 from __future__ import annotations
 
+import asyncio
+import fractions
+import queue
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
+
+import numpy as np
+
+try:
+    import soundcard as sc
+    _SOUNDCARD_AVAILABLE = True
+except Exception:
+    _SOUNDCARD_AVAILABLE = False
+
+try:
+    import av
+    from aiortc import AudioStreamTrack
+    _AIORTC_AUDIO_AVAILABLE = True
+except Exception:
+    _AIORTC_AUDIO_AVAILABLE = False
+    AudioStreamTrack = object  # type: ignore[misc, assignment]
 
 SUPPORTED_AUDIO_CODECS = {"opus", "aac", "pcm"}
 VALID_SAMPLE_RATES = {32000, 44100, 48000}
 VALID_CHANNELS = {1, 2}
 AUDIO_BITRATE_RANGE = (32, 96)
+
+
+class WasapiLoopbackCapturer:
+    """Thu âm thanh hệ thống Windows qua WASAPI Loopback (48kHz, stereo, 20ms block = 960 samples)."""
+
+    def __init__(self, sample_rate: int = 48000, channels: int = 2, block_size: int = 960) -> None:
+        self.sample_rate = int(sample_rate)
+        self.channels = int(channels)
+        self.block_size = int(block_size)
+        self._running = False
+        self._thread: threading.Thread | None = None
+        self._queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=10)
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def is_available() -> bool:
+        if not _SOUNDCARD_AVAILABLE:
+            return False
+        try:
+            spk = sc.default_speaker()
+            return spk is not None
+        except Exception:
+            return False
+
+    def start(self) -> bool:
+        if not self.is_available():
+            return False
+        with self._lock:
+            if self._running:
+                return True
+            self._running = True
+            self._thread = threading.Thread(
+                target=self._record_loop, daemon=True, name="wasapi_loopback"
+            )
+            self._thread.start()
+            return True
+
+    def _record_loop(self) -> None:
+        try:
+            spk = sc.default_speaker()
+            mic = sc.get_microphone(id=str(spk.name), include_loopback=True)
+            with mic.recorder(
+                samplerate=self.sample_rate, channels=self.channels, blocksize=self.block_size
+            ) as rec:
+                while self._running:
+                    data = rec.record(numframes=self.block_size)
+                    chunk = data.astype(np.float32)
+                    if not self._queue.full():
+                        self._queue.put_nowait(chunk)
+                    else:
+                        try:
+                            self._queue.get_nowait()
+                            self._queue.put_nowait(chunk)
+                        except Exception:
+                            pass
+        except Exception:
+            self._running = False
+
+    def read_chunk(self) -> np.ndarray:
+        """Đọc 1 chunk float32 (block_size, channels). Nếu không có hoặc im lặng thì trả về zeros."""
+        try:
+            return self._queue.get_nowait()
+        except queue.Empty:
+            return np.zeros((self.block_size, self.channels), dtype=np.float32)
+
+    def stop(self) -> None:
+        with self._lock:
+            self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+        self._thread = None
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except Exception:
+                break
+
+
+class DesktopAudioStreamTrack(AudioStreamTrack):
+    """AudioStreamTrack cho WebRTC, truyền âm thanh Opus 48kHz Stereo qua RTC MediaStream."""
+
+    def __init__(
+        self, capturer: WasapiLoopbackCapturer | None = None, allowed: bool = False
+    ) -> None:
+        if _AIORTC_AUDIO_AVAILABLE:
+            super().__init__()
+        self.capturer = capturer
+        self.allowed = bool(allowed)
+        self.sample_rate = 48000
+        self.channels = 2
+        self.block_size = 960  # 20ms tương ứng với 48kHz
+        self._time_base = fractions.Fraction(1, 48000)
+        self._pts = 0
+        self._start: float | None = None
+
+    async def recv(self) -> Any:
+        if self._start is None:
+            self._start = time.time()
+            self._pts = 0
+        else:
+            self._pts += self.block_size
+            wait = self._start + (self._pts / self.sample_rate) - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+
+        pts = self._pts
+        time_base = self._time_base
+
+        chunk: np.ndarray | None = None
+        if self.allowed and self.capturer is not None:
+            try:
+                chunk = self.capturer.read_chunk()
+            except Exception:
+                chunk = None
+
+        if chunk is None or not hasattr(chunk, "shape"):
+            chunk = np.zeros((self.block_size, self.channels), dtype=np.float32)
+
+        # Chuyển (block_size, channels) sang planar (channels, block_size) cho format 'fltp'
+        planar_data = np.ascontiguousarray(chunk.T, dtype=np.float32)
+        frame = av.AudioFrame.from_ndarray(planar_data, format="fltp", layout="stereo")
+        frame.sample_rate = self.sample_rate
+        frame.pts = pts
+        frame.time_base = self._time_base
+        return frame
 
 
 @dataclass
@@ -66,9 +212,9 @@ def normalize_audio_config(raw: dict[str, Any] | AudioSessionConfig | None) -> d
 
 
 def validate_audio_config(config: dict[str, Any] | AudioSessionConfig | None) -> bool:
-    cfg = normalize_audio_config(config)
-    if not cfg:
+    if not config:
         return False
+    cfg = normalize_audio_config(config)
     codec = cfg.get("codec", "opus")
     if codec not in SUPPORTED_AUDIO_CODECS:
         return False
@@ -132,8 +278,10 @@ def build_audio_session_config(**kwargs: Any) -> AudioSessionConfig:
 
 __all__ = [
     "AUDIO_BITRATE_RANGE",
+    "DesktopAudioStreamTrack",
     "SUPPORTED_AUDIO_CODECS",
     "AudioSessionConfig",
+    "WasapiLoopbackCapturer",
     "build_audio_session_config",
     "build_loopback_audio_profile",
     "validate_audio_config",

@@ -1,14 +1,29 @@
 {
   "name": "TouchLink Remote",
   "short_name": "TouchLink",
-  "description": "Điều khiển máy tính từ điện thoại",
+  "description": "Điều khiển máy tính từ điện thoại với độ trễ thấp",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
   "orientation": "any",
   "background_color": "#071426",
   "theme_color": "#071426",
+  "categories": ["utilities", "productivity"],
+  "prefer_related_applications": false,
   "icons": [
-    {"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
-    {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+    {
+      "src": "/static/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
   ]
 }

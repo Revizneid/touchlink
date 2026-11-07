@@ -2,6 +2,8 @@ from .base import Transport
 from .lan_ws import LanWsTransport
 from .relay_ws import RelayWsTransport
 from .webrtc import (
+    DesktopVideoStreamTrack,
+    WebRtcPeerSession,
     WebRtcTransport,
     build_data_channels,
     build_webrtc_quality_profile,
@@ -18,11 +20,12 @@ from .webrtc_signaling import (
 )
 
 __all__ = [
-    "RTC_SIGNAL_TYPES",
+    "DesktopVideoStreamTrack",
     "LanWsTransport",
     "RTCSignalMessage",
     "RelayWsTransport",
     "Transport",
+    "WebRtcPeerSession",
     "WebRtcTransport",
     "build_data_channels",
     "build_webrtc_quality_profile",

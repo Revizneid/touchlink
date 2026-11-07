@@ -43,3 +43,10 @@ def test_pipe_sddl_is_tightened_for_system_admins_and_user():
     assert "IU" in sddl
     assert "DU" in sddl
     assert "D:P" in sddl
+
+
+def test_service_remote_unlock_disabled_by_default():
+    from desktop import config as _cfg
+    cfg = _cfg.load()
+    assert cfg.get("remote_unlock_enabled") is False
+

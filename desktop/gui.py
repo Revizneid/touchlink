@@ -40,6 +40,7 @@ NAV = [
     ("dash",   "🖥", "Điều khiển từ xa"),
     ("screen", "📺", "Màn hình chờ"),
     ("hist",   "🕘", "Lịch sử kết nối"),
+    ("audit",  "📋", "Nhật ký kiểm toán"),
     ("dev",    "📱", "Danh sách thiết bị"),
     ("set",    "⚙", "Cài đặt"),
 ]
@@ -222,6 +223,7 @@ class TouchLinkGUI(tk.Tk):
         self._build_page_dash()
         self._build_page_screen()
         self._build_page_hist()
+        self._build_page_audit()
         self._build_page_dev()
         self._build_page_set()
 
@@ -240,6 +242,8 @@ class TouchLinkGUI(tk.Tk):
         self.pages[key].pack(fill="both", expand=True)
         if key == "screen":
             self._start_preview()
+        if key == "audit":
+            self._refresh_audit_log()
         if key == "dev":
             self._refresh_devices()
 
@@ -612,6 +616,95 @@ class TouchLinkGUI(tk.Tk):
             "", "end", values=(time.strftime("%H:%M:%S"),
                                kind_vn.get(rec[0], rec[0]), rec[1]))
 
+    # ---------- page: nhật ký kiểm toán ----------
+    def _build_page_audit(self):
+        page = self._page("audit")
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(0, weight=1)
+        box = self.card(page)
+        box.grid(row=0, column=0, sticky="nsew")
+        box.rowconfigure(1, weight=1)
+        box.columnconfigure(0, weight=1)
+
+        head = tk.Frame(box, bg=C["card"])
+        head.grid(row=0, column=0, sticky="ew")
+        tk.Label(head, text="📋  Nhật ký kiểm toán (Audit Log)", font=(F, 12, "bold"), fg=C["text"],
+                 bg=C["card"]).pack(side="left")
+        tk.Label(head, text="Truy vết bảo mật: xác thực, phiên kết nối, truyền file", font=(F, 9),
+                 fg=C["dim"], bg=C["card"]).pack(side="left", padx=(10, 0))
+
+        btn_box = tk.Frame(head, bg=C["card"])
+        btn_box.pack(side="right")
+        self.btn(btn_box, "🔄 Làm mới", self._refresh_audit_log).pack(side="left", padx=4)
+        self.btn(btn_box, "📂 Mở thư mục", self._open_audit_folder).pack(side="left", padx=4)
+
+        tree_frame = tk.Frame(box, bg=C["card"])
+        tree_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+
+        self.tree_audit = ttk.Treeview(tree_frame, columns=("ts", "evt", "dev", "ip", "perm", "detail"),
+                                       show="headings", height=16)
+        self.tree_audit.heading("ts", text="Thời gian (UTC)")
+        self.tree_audit.heading("evt", text="Sự kiện")
+        self.tree_audit.heading("dev", text="Thiết bị / Viewer")
+        self.tree_audit.heading("ip", text="IP")
+        self.tree_audit.heading("perm", text="Quyền")
+        self.tree_audit.heading("detail", text="Chi tiết")
+
+        self.tree_audit.column("ts", width=140, anchor="w")
+        self.tree_audit.column("evt", width=130, anchor="w")
+        self.tree_audit.column("dev", width=150, anchor="w")
+        self.tree_audit.column("ip", width=90, anchor="w")
+        self.tree_audit.column("perm", width=90, anchor="w")
+        self.tree_audit.column("detail", width=260, anchor="w")
+
+        scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree_audit.yview)
+        self.tree_audit.configure(yscrollcommand=scroll.set)
+        self.tree_audit.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+
+    def _refresh_audit_log(self):
+        import json
+        if not hasattr(self, "tree_audit"):
+            return
+        for item in self.tree_audit.get_children():
+            self.tree_audit.delete(item)
+        log_path = getattr(core._audit, "path", None)
+        if not log_path or not os.path.exists(log_path):
+            return
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            for line in reversed(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    ts = str(entry.get("ts", ""))[:19].replace("T", " ")
+                    evt = str(entry.get("event", ""))
+                    dev = str(entry.get("device_id") or "")
+                    ip = str(entry.get("ip") or "")
+                    perm = str(entry.get("permission") or "")
+                    details = entry.get("details") or {}
+                    detail_str = json.dumps(details, ensure_ascii=False) if isinstance(details, dict) else str(details)
+                    self.tree_audit.insert("", "end", values=(ts, evt, dev, ip, perm, detail_str))
+                except Exception:
+                    continue
+        except Exception as e:
+            core.log(f"Lỗi đọc audit log: {e}")
+
+    def _open_audit_folder(self):
+        log_path = getattr(core._audit, "path", None)
+        if log_path:
+            folder = os.path.dirname(log_path)
+            if os.path.exists(folder):
+                try:
+                    os.startfile(folder)
+                except Exception:
+                    pass
+
     # ---------- page: thiết bị ----------
     def _build_page_dev(self):
         page = self._page("dev")
@@ -621,19 +714,28 @@ class TouchLinkGUI(tk.Tk):
         box = self.card(page)
         box.grid(row=0, column=0, columnspan=2, sticky="nsew")
         box.columnconfigure(0, weight=1)
-        tk.Label(box, text="📱  Danh sách thiết bị", font=(F, 12, "bold"), fg=C["text"],
+        tk.Label(box, text="📱  Danh sách thiết bị & Quản lý Multi-Viewer", font=(F, 12, "bold"), fg=C["text"],
                  bg=C["card"]).pack(anchor="w")
-        tk.Label(box, text="Máy tính này và các thiết bị đang kết nối (dữ liệu thật)",
+        tk.Label(box, text="Máy tính này, địa chỉ MAC (Wake-on-LAN), và các thiết bị đang kết nối",
                  font=(F, 9), fg=C["dim"], bg=C["card"]).pack(anchor="w")
         grid = tk.Frame(box, bg=C["card"])
         grid.pack(fill="x", pady=10)
-        info = ("Máy: {}\nID: {}\nPhiên bản: v{}\nLAN: {}\nRelay: {}".format(
+        try:
+            import wol
+            local_mac = wol.get_local_mac_address()
+        except Exception:
+            local_mac = "—"
+        info = ("Máy: {}\nID: {}\nPhiên bản: v{}\nMAC (WoL): {}\nLAN: {}\nRelay: {}".format(
             os.environ.get("COMPUTERNAME", "PC"), self.cfg.get("device_id", "—"),
-            cfgmod.VERSION, ", ".join(build_urls(self.cfg)),
+            cfgmod.VERSION, local_mac, ", ".join(build_urls(self.cfg)),
             self.cfg.get("relay_url", "—")))
         tk.Label(grid, text=info, font=(MONO, 10), fg=C["text"], bg=C["elev"],
                  justify="left", padx=12, pady=10).pack(side="left", fill="x",
                                                         expand=True)
+        btn_row_wol = tk.Frame(box, bg=C["card"])
+        btn_row_wol.pack(anchor="w", pady=(2, 0))
+        self.btn(btn_row_wol, "⚡ Gửi thử Magic Packet WoL", self._test_wol_click).pack(side="left")
+
         row = tk.Frame(page, bg=C["bg"])
         row.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(14, 0))
         row.columnconfigure(0, weight=1)
@@ -642,19 +744,55 @@ class TouchLinkGUI(tk.Tk):
         box2.grid(row=0, column=0, sticky="nsew")
         box2.rowconfigure(1, weight=1)
         box2.columnconfigure(0, weight=1)
-        tk.Label(box2, text="Người xem đang kết nối", font=(F, 11, "bold"),
+        tk.Label(box2, text="Người xem đang kết nối (1 Controller + N View-only)", font=(F, 11, "bold"),
                  fg=C["text"], bg=C["card"]).pack(anchor="w")
         self.lbl_viewers = tk.Label(box2, text="—", font=(MONO, 10), fg=C["dim"],
                                     bg=C["card"], justify="left", anchor="nw")
         self.lbl_viewers.pack(fill="both", expand=True, pady=(8, 0))
+
+        v_actions = tk.Frame(box2, bg=C["card"])
+        v_actions.pack(anchor="w", pady=(8, 0))
+        self.btn(v_actions, "👑 Đổi quyền Controller", self._promote_controller_click, primary=True).pack(side="left")
+
+    def _test_wol_click(self):
+        try:
+            import wol
+            mac = wol.get_local_mac_address()
+            ok = wol.send_magic_packet(mac)
+            if ok:
+                self.toast(f"Đã phát gói Magic Packet WoL tới {mac}", "ok")
+            else:
+                self.toast("Không thể gửi gói Magic Packet", "err")
+        except Exception as e:
+            self.toast(f"Lỗi WoL: {e}", "err")
+
+    def _promote_controller_click(self):
+        conns = core.clients_snapshot()
+        if not conns:
+            self.toast("Không có người xem nào để đặt Controller", "warn")
+            return
+        non_ctls = [c[0] for c in conns if len(c) > 2 and c[2] != "controller"]
+        target = non_ctls[0] if non_ctls else conns[0][0]
+        if core.set_active_controller(target):
+            self.toast(f"Đã chuyển quyền Controller sang {target}", "ok")
+            self._refresh_devices()
+        else:
+            self.toast("Không thể chuyển quyền Controller", "err")
 
     def _refresh_devices(self):
         if self._page_key != "dev":
             return
         conns = core.clients_snapshot()
         if conns:
-            self.lbl_viewers.configure(text="\n".join(
-                f"• {n}  (từ {s})" for n, s in conns), fg=C["text"])
+            lines = []
+            for item in conns:
+                n = item[0]
+                s = item[1]
+                role = item[2] if len(item) > 2 else "viewer"
+                is_ctl = item[3] if len(item) > 3 else (role == "controller")
+                badge = "👑 [CONTROLLER]" if is_ctl else "👁 [CHỈ XEM]"
+                lines.append(f"{badge} {n}  (từ {s})")
+            self.lbl_viewers.configure(text="\n".join(lines), fg=C["text"])
         else:
             self.lbl_viewers.configure(
                 text="Không có ai đang xem.\nMở https://touchlink.vercel.app trên "
@@ -754,6 +892,20 @@ class TouchLinkGUI(tk.Tk):
                  "UltraViewer/TeamViewer. Cài 1 lần duy nhất.",
                  font=(F, 8), fg=C["dim"], bg=C["card"], justify="left",
                  wraplength=720).pack(anchor="w", pady=(4, 0))
+
+        tk.Frame(box, bg=C["line"], height=1).pack(fill="x", pady=(14, 10))
+        tk.Label(box, text="🔊  Âm thanh hệ thống qua WebRTC (WASAPI Loopback)",
+                 font=(F, 10, "bold"), fg=C["text"], bg=C["card"]).pack(anchor="w")
+        tk.Label(box,
+                 text="Cho phép người xem nghe âm thanh phát ra từ máy tính này (mặc định TẮT — cần xác nhận).\n"
+                      "⚠ Chỉ bật khi bạn đồng ý chia sẻ âm thanh hệ thống. Áp dụng cho phiên WebRTC tiếp theo.",
+                 font=(F, 9), fg=C["dim"], bg=C["card"], justify="left",
+                 wraplength=720).pack(anchor="w", pady=(4, 6))
+        self.var_audio = tk.BooleanVar(value=bool(self.cfg.get("audio_enabled", False)))
+        ttk.Checkbutton(box, text="Bật âm thanh WASAPI (mặc định TẮT — cần xác nhận)",
+                        variable=self.var_audio).pack(anchor="w")
+        self.btn(box, "Lưu cài đặt âm thanh", self._save_audio_setting,
+                 primary=True).pack(anchor="w", pady=(8, 0))
 
     def _probe_svc(self):
         def _run():
@@ -856,6 +1008,14 @@ class TouchLinkGUI(tk.Tk):
         import config as cfgmod
         cfgmod.save(self.cfg)
         self.toast("Đã lưu cài đặt xác nhận", "ok")
+
+    def _save_audio_setting(self):
+        enabled = bool(self.var_audio.get())
+        self.cfg["audio_enabled"] = enabled
+        import config as cfgmod
+        cfgmod.save(self.cfg)
+        msg = "Đã BẬT âm thanh WASAPI (sẽ áp dụng cho phiên WebRTC tiếp theo)" if enabled else "Đã TẮT âm thanh WASAPI"
+        self.toast(msg, "ok")
 
     def _open_cfgdir(self):
         try:
