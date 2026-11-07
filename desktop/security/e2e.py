@@ -21,6 +21,7 @@ import time
 from typing import Any
 
 from cryptography.exceptions import InvalidTag
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -129,7 +130,7 @@ def verify_ed25519_signature(public_key: Any, message: Any, signature: bytes) ->
                 return False
         public_key.verify(sig, msg)
         return True
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, InvalidSignature):
         return False
 
 

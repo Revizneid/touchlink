@@ -14,6 +14,7 @@ import time
 from collections.abc import Iterable
 from typing import Any
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from desktop.secure import protect, unprotect
@@ -108,7 +109,7 @@ class DeviceTrustStore:
             public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
             public_key.verify(signature, (nonce.decode("utf-8") if isinstance(nonce, (bytes, bytearray)) else str(nonce)).encode("utf-8"))
             return True
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, InvalidSignature):
             return False
 
     def trusted_device_ids(self) -> Iterable[str]:

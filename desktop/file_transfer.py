@@ -71,7 +71,7 @@ def validate_file_offer(payload: dict[str, Any] | None) -> bool:
         sanitize_file_name(name)
     except ValueError:
         return False
-    return re.fullmatch(r"[0-9a-fA-F]{64}", sha256)
+    return bool(re.fullmatch(r"[0-9a-fA-F]{64}", sha256))
 
 
 def build_file_offer(transfer_id: str, file_name: str, file_size: int, sha256_hex: str) -> dict[str, Any]:
