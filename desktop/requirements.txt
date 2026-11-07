@@ -16,5 +16,5 @@ psutil>=5.9
 aiortc==1.9.0
 av==12.3.0
 # Sprint 4.1: WASAPI loopback audio capture âm thanh hệ thống Windows
-soundcard==0.4.3
+soundcard==0.4.6
 
