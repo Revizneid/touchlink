@@ -17,7 +17,10 @@ from typing import Any
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from desktop.secure import protect, unprotect
+try:
+    from secure import protect, unprotect
+except (ImportError, ModuleNotFoundError):
+    from desktop.secure import protect, unprotect
 
 
 class DeviceTrustStore:

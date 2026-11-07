@@ -4,6 +4,7 @@
 # Build:  pyinstaller TouchLink.spec
 # Target: < 35 MB portable exe (UPX + aggressive excludes)
 
+import os
 import sys
 from PyInstaller.utils.hooks import collect_submodules
 
@@ -13,6 +14,18 @@ _av_hidden = collect_submodules('av')
 
 # -- Hidden imports: every third-party package the app touches -----------------
 _hidden = [
+    # Local desktop submodules
+    'config', 'core', 'server', 'input_control', 'relay_client', 'secure',
+    'util', 'auth', 'capture', 'gui', 'overlay', 'adaptive', 'audio',
+    'file_transfer', 'multi_viewer', 'wol', 'svcpipe', 'protocol', 'compat',
+    'consent', 'keepawake', 'update', 'release',
+    'capture.base', 'capture.dxgi_capturer', 'capture.factory',
+    'capture.mss_capturer', 'capture.tile_engine',
+    'input.sendinput',
+    'security.audit', 'security.e2e', 'security.otp', 'security.pairing',
+    'security.policy', 'security.service_hardening', 'security.trust_store',
+    'transport.base', 'transport.lan_ws', 'transport.relay_ws',
+    'transport.webrtc', 'transport.webrtc_signaling',
     # Image / QR
     'qrcode', 'qrcode.image.pil', 'qrcode.image.base',
     'PIL', 'PIL._tkinter_finder', 'PIL.ImageTk',
@@ -23,7 +36,6 @@ _hidden = [
     'pyperclip',
     # Audio (WASAPI loopback)
     'soundcard', 'soundcard.mediafoundation',
-    # WebRTC / media — collected via collect_submodules above
     # Networking
     'aiohttp', 'aiohttp.web',
     # Crypto (Ed25519, AESGCM, HKDF, X25519)
@@ -43,7 +55,7 @@ _hidden = [
     'servicemanager', 'pywintypes', 'win32timezone',
     # Tkinter — GUI
     'tkinter', 'tkinter.ttk', 'tkinter.messagebox',
-    # Stdlib that PyInstaller occasionally misses
+    # Stdlib
     'asyncio', 'queue', 'json', 'hashlib', 'struct', 'secrets',
     'fractions', 'dataclasses', 'platform',
 ]
@@ -63,8 +75,6 @@ _excludes = [
     'sqlite3', 'sqlalchemy', 'psycopg2',
     # Unused image encoders PyInstaller may pull via Pillow
     'PIL.ImageQt',
-    # Unused packaging/build tools
-    'setuptools', 'pip', 'wheel', 'pkg_resources', 'distutils', 'ensurepip',
     # Misc
     'tkinter.tix', 'lib2to3', 'xmlrpc', 'curses',
     'multiprocessing.popen_spawn_posix',
@@ -74,7 +84,7 @@ _excludes = [
 
 a = Analysis(
     ['desktop/main.py'],
-    pathex=['desktop'],
+    pathex=['desktop', '.'],
     binaries=[],
     datas=[
         ('web', 'web'),
@@ -102,7 +112,6 @@ exe = EXE(
     strip=False,
     upx=True,
     upx_exclude=[
-        # UPX corrupts some DLLs — exclude known problematic ones
         'vcruntime140.dll',
         'python3*.dll',
         'libcrypto*.dll',
@@ -116,5 +125,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['assets/icon.ico'],
-    version='file_version_info.txt' if __import__('os').path.exists('file_version_info.txt') else None,
 )

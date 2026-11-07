@@ -22,13 +22,25 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_here = os.path.dirname(os.path.abspath(__file__))
+_root = os.path.dirname(_here)
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+if _root not in sys.path:
+    sys.path.insert(1, _root)
 
-from desktop.security.service_hardening import (
-    build_pipe_sddl,
-    sanitize_pipe_operation,
-    validate_pipe_client,
-)
+try:
+    from security.service_hardening import (
+        build_pipe_sddl,
+        sanitize_pipe_operation,
+        validate_pipe_client,
+    )
+except (ImportError, ModuleNotFoundError):
+    from desktop.security.service_hardening import (
+        build_pipe_sddl,
+        sanitize_pipe_operation,
+        validate_pipe_client,
+    )
 
 PIPE_NAME = r'\\.\pipe\TouchLinkSvc'
 

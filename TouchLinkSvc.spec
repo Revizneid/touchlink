@@ -6,10 +6,16 @@
 
 a = Analysis(
     ['desktop/svc_main.py'],
-    pathex=['desktop'],
+    pathex=['desktop', '.'],
     binaries=[],
     datas=[],
     hiddenimports=[
+        # Local modules
+        'config', 'core', 'input_control', 'secure', 'util', 'capture',
+        'capture.base', 'capture.dxgi_capturer', 'capture.factory',
+        'capture.mss_capturer', 'capture.tile_engine',
+        'input.sendinput',
+        'security.service_hardening',
         # Win32 service framework
         'win32timezone', 'servicemanager',
         'win32event', 'win32service', 'win32serviceutil',
@@ -19,8 +25,6 @@ a = Analysis(
         # Capture (service does screen grab)
         'dxcam', 'mss', 'mss.windows', 'numpy',
         'PIL', 'PIL._tkinter_finder',
-        # Input
-        'pyautogui', 'pyautogui._pyautogui_win',
         # Security
         'cryptography',
         'cryptography.hazmat.primitives.asymmetric.ed25519',
@@ -34,7 +38,6 @@ a = Analysis(
         'pytest', 'unittest', '_pytest', 'pdb', 'pydoc',
         'scipy', 'pandas', 'matplotlib', 'IPython', 'notebook',
         'flask', 'django', 'tornado', 'fastapi',
-        'setuptools', 'pip', 'wheel', 'pkg_resources', 'distutils',
         'tkinter.tix', 'lib2to3', 'curses',
     ],
     noarchive=False,

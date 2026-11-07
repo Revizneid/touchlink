@@ -12,7 +12,12 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_here = os.path.dirname(os.path.abspath(__file__))
+_root = os.path.dirname(_here)
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+if _root not in sys.path:
+    sys.path.insert(1, _root)
 
 import config as cfgmod
 import core
