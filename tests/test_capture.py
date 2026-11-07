@@ -23,8 +23,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "desktop"))
 # ---------------------------------------------------------------------------
 # Import module cần test
 # ---------------------------------------------------------------------------
-from capture.tile_engine import TileEngine, scale_frame, TILE_SIZE_DEFAULT, _HEADER_FMT, _TILE_FMT
-from capture.base import Frame, Rect
+from capture.tile_engine import (
+    TileEngine,
+    scale_frame,
+    TILE_SIZE_DEFAULT,
+    _HEADER_FMT,
+    _TILE_FMT,
+    merge_tile_payloads,
+    unpack_tile_payload,
+)
+from capture.base import Capturer, Frame, Rect
 
 
 def _solid_frame(h: int, w: int, color: tuple[int, int, int]) -> np.ndarray:
@@ -312,6 +320,181 @@ class TestTileEngineNonSquare(unittest.TestCase):
         self.assertIsNotNone(payload)
         self.assertEqual(payload[0:1], b"\x01",
                          "Thay đổi kích thước phải gửi keyframe")
+
+
+class TestMergeTilePayloads(unittest.TestCase):
+    """Test merge_tile_payloads và unpack_tile_payload."""
+
+    def test_merge_disjoint_tiles(self):
+        engine = TileEngine(64)
+        base = _solid_frame(128, 128, (0, 0, 0))
+        engine.process(base, 75, force_keyframe=True)
+
+        # Frame 1: tile (0, 0) dirty
+        f1 = base.copy()
+        f1[0:64, 0:64] = [10, 10, 10]
+        p1 = engine.process(f1, 75)
+        self.assertIsNotNone(p1)
+        self.assertEqual(p1[0:1], b"\x02")
+
+        # Frame 2: tile (64, 0) dirty
+        f2 = f1.copy()
+        f2[0:64, 64:128] = [20, 20, 20]
+        p2 = engine.process(f2, 75)
+        self.assertIsNotNone(p2)
+        self.assertEqual(p2[0:1], b"\x02")
+
+        # Merge p1 và p2 với max_tile_ratio=1.0 (cho phép 2/4 tile = 50%)
+        merged = merge_tile_payloads(p1, p2, max_tile_ratio=1.0)
+        self.assertIsNotNone(merged)
+        self.assertEqual(merged[0:1], b"\x02")
+        fw, fh, ts, tiles = _parse_tile_payload(merged)
+        self.assertEqual(len(tiles), 2)
+        coords = {(t["tx"], t["ty"]) for t in tiles}
+        self.assertEqual(coords, {(0, 0), (64, 0)})
+
+    def test_merge_overlapping_tiles_takes_newer(self):
+        engine = TileEngine(64)
+        base = _solid_frame(128, 128, (0, 0, 0))
+        engine.process(base, 75, force_keyframe=True)
+
+        # Frame 1: tile (0, 0) color 10
+        f1 = base.copy()
+        f1[0:64, 0:64] = [10, 10, 10]
+        p1 = engine.process(f1, 75)
+
+        # Frame 2: tile (0, 0) color 99
+        f2 = base.copy()
+        f2[0:64, 0:64] = [99, 99, 99]
+        p2 = engine.process(f2, 75)
+
+        merged = merge_tile_payloads(p1, p2, max_tile_ratio=1.0)
+        self.assertIsNotNone(merged)
+        fw, fh, ts, tiles = _parse_tile_payload(merged)
+        self.assertEqual(len(tiles), 1)
+        self.assertEqual(tiles[0]["tx"], 0)
+        self.assertEqual(tiles[0]["ty"], 0)
+
+    def test_merge_exceeding_ratio_returns_none(self):
+        engine = TileEngine(64)
+        base = _solid_frame(128, 128, (0, 0, 0))
+        engine.process(base, 75, force_keyframe=True)
+
+        # Thay đổi 3/4 tile
+        f1 = base.copy()
+        f1[0:64, 0:64] = [10, 10, 10]
+        f1[0:64, 64:128] = [20, 20, 20]
+        p1 = engine.process(f1, 75)
+
+        f2 = f1.copy()
+        f2[64:128, 0:64] = [30, 30, 30]
+        p2 = engine.process(f2, 75)
+
+        # 3 tile / 4 tổng = 75% > 60% default ratio -> None (ép keyframe)
+        merged = merge_tile_payloads(p1, p2, max_tile_ratio=0.6)
+        self.assertIsNone(merged)
+
+    def test_merge_with_full_frame_returns_none(self):
+        p1 = b"\x01\x00\x10\x00\x10" + b"dummyjpeg"
+        p2 = b"\x02\x00\x10\x00\x10\x00\x40\x00\x00"
+        self.assertIsNone(merge_tile_payloads(p1, p2))
+
+
+class TestCapturerProtocolConformance(unittest.TestCase):
+    """Kiểm tra DxgiCapturer và MssCapturer tuân thủ giao thức Capturer."""
+
+    def test_dxgi_conforms_to_capturer(self):
+        from capture.dxgi_capturer import DxgiCapturer
+        cap = DxgiCapturer()
+        self.assertIsInstance(cap, Capturer)
+        self.assertEqual(cap.name, "dxgi")
+        self.assertEqual(cap.dirty_rects(), [])
+
+    def test_mss_conforms_to_capturer(self):
+        from capture.mss_capturer import MssCapturer
+        cap = MssCapturer()
+        self.assertIsInstance(cap, Capturer)
+        self.assertEqual(cap.name, "mss")
+        self.assertEqual(cap.dirty_rects(), [])
+
+
+class TestDxgiCapturerDetails(unittest.TestCase):
+    """Kiểm tra các kịch bản lỗi của DxgiCapturer."""
+
+    def test_monitor_zero_raises(self):
+        from capture.dxgi_capturer import DxgiCapturer
+        cap = DxgiCapturer()
+        with self.assertRaises(RuntimeError) as cm:
+            cap.start(0)
+        self.assertIn("monitor=0", str(cm.exception))
+
+    def test_dxcam_create_returns_none_raises(self):
+        from capture.dxgi_capturer import DxgiCapturer
+        cap = DxgiCapturer()
+        with patch("dxcam.create", return_value=None):
+            with self.assertRaises(RuntimeError):
+                cap.start(1)
+
+    def test_dxcam_create_raises_com_error(self):
+        from capture.dxgi_capturer import DxgiCapturer
+        cap = DxgiCapturer()
+        with patch("dxcam.create", side_effect=Exception("Access is denied")):
+            with self.assertRaises(RuntimeError) as cm:
+                cap.start(1)
+            self.assertIn("dxcam không khởi tạo được", str(cm.exception))
+
+
+class TestClientConnMailboxMerge(unittest.TestCase):
+    """Kiểm tra cơ chế mailbox và gộp dirty tile trong ClientConn."""
+
+    def test_mailbox_merges_two_tile_frames(self):
+        from desktop.core import ClientConn
+        conn = ClientConn(
+            name="test-viewer",
+            send_json=MagicMock(),
+            send_bytes=MagicMock(),
+            close=MagicMock(),
+        )
+        conn.caps = ["tiles"]
+
+        engine = TileEngine(64)
+        base = _solid_frame(128, 128, (0, 0, 0))
+        engine.process(base, 75, force_keyframe=True)
+
+        f1 = base.copy()
+        f1[0:64, 0:64] = [10, 10, 10]
+        p1 = engine.process(f1, 75)
+
+        f2 = f1.copy()
+        f2[0:64, 64:128] = [20, 20, 20]
+        p2 = engine.process(f2, 75)
+
+        # Đẩy frame 1 vào mailbox
+        conn.offer_frame(p1)
+        self.assertEqual(conn._frame, p1)
+
+        # Đẩy frame 2 khi frame 1 chưa kịp gửi -> gộp tile
+        with patch("desktop.core.merge_tile_payloads", return_value=b"\x02merged"):
+            conn.offer_frame(p2)
+            self.assertEqual(conn._frame, b"\x02merged")
+
+    def test_mailbox_forces_keyframe_on_unmergeable_drop(self):
+        from desktop.core import ClientConn
+        conn = ClientConn(
+            name="test-viewer",
+            send_json=MagicMock(),
+            send_bytes=MagicMock(),
+            close=MagicMock(),
+        )
+        conn.caps = ["tiles"]
+        conn._need_keyframe = False
+
+        conn.offer_frame(b"\x02frame1")
+        # Giả lập không gộp được (ví dụ quá nhiều tile)
+        with patch("desktop.core.merge_tile_payloads", return_value=None):
+            conn.offer_frame(b"\x02frame2")
+            self.assertEqual(conn._frame, b"\x02frame2")
+            self.assertTrue(conn._need_keyframe)
 
 
 if __name__ == "__main__":
