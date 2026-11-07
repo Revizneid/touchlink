@@ -22,6 +22,7 @@ from capture import (
     grab_jpeg,
     list_monitors,
     make_capturer,
+    merge_tile_payloads,
     scale_frame,
 )
 
@@ -231,14 +232,30 @@ class ClientConn:
     def offer_frame(self, data: bytes | None) -> None:
         """Đẩy payload nhị phân vào mailbox.
 
-        None có nghĩa: màn hình tĩnh, không gửi gì (heartbeat được
-        xử lý riêng bởi stream_loop).
+        Nếu mailbox đã có frame chưa gửi (viewer chậm / lag):
+        - Với tile 0x02: gộp dirty rect (merge_tile_payloads) giữa frame cũ và mới.
+        - Nếu gộp không thành công hoặc vượt ngưỡng: gán frame mới và ép keyframe
+          cho lần gửi tiếp theo để chống lệch hình.
+        - Với viewer cũ (0x01): ghi đè frame mới nhất.
         """
         if not self.alive or data is None:
             return
         if len(data) > _MAX_FRAME_BYTES:
             log("offer_frame: payload quá lớn (%d B), bỏ qua" % len(data))
             return
+
+        if self._frame is not None:
+            if self.supports_tiles and self._frame[0:1] == b"\x02" and data[0:1] == b"\x02":
+                merged = merge_tile_payloads(self._frame, data)
+                if merged is not None:
+                    self._frame = merged
+                    self._frame_evt.set()
+                    return
+                # Gộp không thành công hoặc quá nhiều tile thay đổi -> ép keyframe kế tiếp
+                self.request_keyframe()
+            elif self.supports_tiles:
+                self.request_keyframe()
+
         self._frame = data  # chỉ giữ frame mới nhất
         self._frame_evt.set()
 
@@ -258,6 +275,7 @@ class ClientConn:
             try:
                 await asyncio.wait_for(self.send_bytes(data), timeout=6)
             except Exception:
+                self.request_keyframe()
                 asyncio.create_task(remove_client(self, "(kết nối chậm)"))
                 return
 
