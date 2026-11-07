@@ -430,3 +430,47 @@ ls docs/DEPLOY_RELAY.md && grep -c "^##" docs/DEPLOY_RELAY.md
 - [ ] `deploy/Dockerfile` build được (hoặc cú pháp đúng)
 - [ ] `deploy/fly.toml` có `auto_stop_machines = false` và `min_machines_running = 1`
 - [ ] `docs/DEPLOY_RELAY.md` có bảng so sánh 4 tùy chọn hosting
+
+---
+
+## 10. Sprint 1.1 — Capture DXGI Desktop Duplication & Tile Dirty-Rect
+
+### 10.1 Kiểm thử tự động (pytest)
+
+```bash
+pytest tests/test_capture.py -v
+```
+
+**Mục tiêu kiểm thử:**
+- [x] `TestTileEngineStatic`: Màn hình tĩnh trả về `None` sau keyframe đầu, không gửi dữ liệu thừa.
+- [x] `TestTileEngineDirty`: Phát hiện chính xác tile thay đổi, đóng gói wire format 0x02.
+- [x] `TestMergeTilePayloads`: Gộp các tile khi viewer chậm / lag; ép keyframe khi vượt quá tỷ lệ 60% màn hình hoặc đổi độ phân giải.
+- [x] `TestClientConnMailboxMerge`: Mailbox viewer áp dụng `merge_tile_payloads` và kích hoạt `request_keyframe` khi bỏ frame.
+- [x] `TestCapturerProtocolConformance`: Cả `DxgiCapturer` và `MssCapturer` đều tuân thủ protocol `Capturer`.
+- [x] `TestFactoryFallback`: Tự động fallback về MSS khi DXGI ném lỗi hoặc monitor 0 (virtual desktop).
+- [x] `TestTileEngineNonSquare`: Thay đổi độ phân giải / DPI giữa chừng tự động nhận diện và gửi keyframe, không gây crash.
+
+### 10.2 Benchmark hiệu năng
+
+```bash
+python scripts/bench_capture.py --scenario all --duration 10 --no-wait
+# Hoặc kiểm thử chế độ synthetic cho môi trường CI / headless:
+python scripts/bench_capture.py --safe --no-wait --duration 5
+```
+
+**Tiêu chí DoD:**
+- [x] Màn hình tĩnh: CPU < 3% (toàn máy) và băng thông gần 0 (0 dirty frames).
+- [x] Cuộn văn bản: FPS dirty ≥ 15 fps.
+- [x] Video 720p: FPS dirty ≥ 15 fps.
+- [x] Fallback MSS hoạt động trơn tru khi DXGI không khả dụng.
+- [x] Bảng so sánh trước / sau được ghi tự động vào `docs/BENCHMARK.md`.
+
+### 10.3 Kiểm thử thủ công trên PWA / Web Client
+
+1. Khởi động desktop agent: `python desktop/main.py --safe-test`
+2. Mở trình duyệt truy cập PWA (hoặc `http://localhost:8420`).
+3. Mở F12 DevTools Console & Network:
+   - [ ] Handshake `hello` gửi caps chứa `"tiles"`.
+   - [ ] Nhận frame nhị phân type `0x02` với danh sách dirty tiles khi thao tác giao diện.
+   - [ ] PWA dùng `createImageBitmap` vẽ từng tile lên canvas mượt mà, không bị rách hay lệch hình.
+   - [ ] Màn hình tĩnh: Network tab chỉ nhận ping/pong heartbeat, không nhận frame nhị phân nào.
