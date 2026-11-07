@@ -388,7 +388,7 @@ function connect(hostStr, id, pass) {
   if (!isRelay) {
     authTimer = setTimeout(function () {
       if (!st.authed) { try { ws.close(); } catch (e) {} loginError('Hết thời gian chờ — kiểm tra ID/mật khẩu và cùng mạng Wi-Fi.'); }
-    }, 12000);
+    }, 60000);
   }
 
   ws.onopen = function () {

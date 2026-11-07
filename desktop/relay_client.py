@@ -27,6 +27,8 @@ _audit: _AuditLogger = _AuditLogger()
 _BACKOFF_BASE = 1
 _BACKOFF_MAX  = 30
 _JITTER_MAX   = 3.0  # giây jitter ngẫu nhiên cộng thêm để tránh thundering herd
+_CONNECT_TIMEOUT_S = 60
+_WS_CLOSE_TIMEOUT_S = 60
 
 
 def _next_backoff(current: float) -> float:
@@ -116,7 +118,10 @@ class RelayClient:
                 self.ws = await self.session.ws_connect(
                     cfg.get("relay_url"),
                     heartbeat=20,
-                    timeout=aiohttp.ClientWSTimeout(ws_close=10),
+                    timeout=aiohttp.ClientWSTimeout(
+                        total=_CONNECT_TIMEOUT_S,
+                        ws_close=_WS_CLOSE_TIMEOUT_S,
+                    ),
                 )
                 from wol import get_local_mac_address
                 local_mac = str(cfg.get("mac_address") or get_local_mac_address())
@@ -128,7 +133,7 @@ class RelayClient:
                     }
                 )
                 # Chờ registered / error
-                first = await asyncio.wait_for(self.ws.__anext__(), timeout=10)
+                first = await asyncio.wait_for(self.ws.__anext__(), timeout=_CONNECT_TIMEOUT_S)
                 if first.type == WSMsgType.TEXT:
                     d = json.loads(first.data)
                     if d.get("type") == "registered":

@@ -23,8 +23,9 @@ import pytest_asyncio
 from aiohttp import WSMsgType
 from aiohttp.test_utils import TestClient, TestServer
 
-# Thêm relay/ vào path
+# Thêm relay/ và desktop/ vào path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "relay"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "desktop"))
 
 from relay_server import (
     RelayConfig,
@@ -170,6 +171,16 @@ class TestDeviceIdRegex:
 
     def test_reject_long(self):
         assert not DEVICE_ID_RE.match("2345678901")
+
+    def test_reject_letters(self):
+        assert not DEVICE_ID_RE.match("23456789a")
+
+
+def test_relay_connect_timeout_uses_60_seconds():
+    import desktop.relay_client as relay_client
+
+    assert relay_client._CONNECT_TIMEOUT_S == 60
+    assert relay_client._WS_CLOSE_TIMEOUT_S == 60
 
     def test_reject_letters(self):
         assert not DEVICE_ID_RE.match("23456789a")
