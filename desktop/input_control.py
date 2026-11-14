@@ -70,12 +70,20 @@ def mouse(action: str, x=None, y=None, button="left", clicks=1, amount=0, horizo
     elif action == "moverel":
         backend.move_relative(int(x or 0), int(y or 0))
     elif action == "down":
+        if x is not None and y is not None:
+            backend.move_absolute(int(x), int(y))
         backend.mouse_down(str(button))
     elif action == "up":
+        if x is not None and y is not None:
+            backend.move_absolute(int(x), int(y))
         backend.mouse_up(str(button))
     elif action == "click":
+        if x is not None and y is not None:
+            backend.move_absolute(int(x), int(y))
         backend.click(str(button), max(1, int(clicks or 1)))
     elif action == "scroll":
+        if x is not None and y is not None:
+            backend.move_absolute(int(x), int(y))
         backend.wheel(int(amount or 0), bool(horizontal))
 
 

@@ -182,8 +182,15 @@ def test_relay_connect_timeout_uses_60_seconds():
     assert relay_client._CONNECT_TIMEOUT_S == 60
     assert relay_client._WS_CLOSE_TIMEOUT_S == 60
 
-    def test_reject_letters(self):
-        assert not DEVICE_ID_RE.match("23456789a")
+
+def test_normalize_relay_url():
+    import desktop.relay_client as relay_client
+
+    assert relay_client.normalize_relay_url("https://myrelay.com") == "wss://myrelay.com/ws"
+    assert relay_client.normalize_relay_url("http://localhost:8430") == "ws://localhost:8430/ws"
+    assert relay_client.normalize_relay_url("wss://myrelay.com/ws") == "wss://myrelay.com/ws"
+    assert relay_client.normalize_relay_url("wss://myrelay.com/") == "wss://myrelay.com/ws"
+    assert relay_client.normalize_relay_url("myrelay.com") == "wss://myrelay.com/ws"
 
 
 # ---------------------------------------------------------------------------

@@ -778,8 +778,10 @@ async def _handle_input(conn, msg):
         px = py = None
         if x is not None and y is not None and meta["width"]:
             try:
-                fx = float(x) * meta["width"] / max(1, meta["fw"])
-                fy = float(y) * meta["height"] / max(1, meta["fh"])
+                fw = max(1, meta.get("fw") or meta["width"])
+                fh = max(1, meta.get("fh") or meta["height"])
+                fx = float(x) * (meta["width"] - 1) / max(1, fw - 1) if fw > 1 else float(x)
+                fy = float(y) * (meta["height"] - 1) / max(1, fh - 1) if fh > 1 else float(y)
                 px = meta["left"] + max(0, min(meta["width"] - 1, round(fx)))
                 py = meta["top"] + max(0, min(meta["height"] - 1, round(fy)))
             except Exception:

@@ -120,8 +120,8 @@ def normalize_absolute_xy(x: float, y: float, left: int = 0, top: int = 0, width
     """Chuẩn hóa tọa độ tuyệt đối thành 0..65535 cho MOUSEEVENTF_ABSOLUTE."""
     width = max(1, int(width))
     height = max(1, int(height))
-    xr = max(0, min(int(x), left + width))
-    yr = max(0, min(int(y), top + height))
+    xr = max(left, min(int(x), left + width))
+    yr = max(top, min(int(y), top + height))
     nx = int((xr - left) / max(1, width) * 65535.0)
     ny = int((yr - top) / max(1, height) * 65535.0)
     return max(0, min(nx, 65535)), max(0, min(ny, 65535))
@@ -283,8 +283,8 @@ class WindowsSendInputBackend(InputBackend):
             self._send_keyboard(vk, scan, flags | KEYEVENTF_KEYUP)
 
     def move_absolute(self, x: int, y: int) -> None:
-        left = int(get_system_metrics(-76))
-        top = int(get_system_metrics(-77))
+        left = int(get_system_metrics(76))
+        top = int(get_system_metrics(77))
         width = max(1, int(get_system_metrics(78)))
         height = max(1, int(get_system_metrics(79)))
         nx, ny = normalize_absolute_xy(x, y, left, top, width, height)

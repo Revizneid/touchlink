@@ -407,11 +407,22 @@ async def ws_handler(
                     # Kiểm tra agent cũ
                     old = state.agents.get(did)
                     if old and not old["ws"].closed and old["ws"] is not ws:
-                        await _try_send(ws, {"type": "error",
-                                             "message": "Mã máy đã có máy khác đăng ký"})
-                        _log(logger, "WARNING", "register_conflict",
-                             ip=ip, device_id=did)
-                        continue
+                        old_alive = True
+                        try:
+                            await old["ws"].ping()
+                        except Exception:
+                            old_alive = False
+                        if old_alive:
+                            await _try_send(ws, {"type": "error",
+                                                 "message": "Mã máy đã có máy khác đăng ký"})
+                            _log(logger, "WARNING", "register_conflict",
+                                 ip=ip, device_id=did)
+                            continue
+                        else:
+                            try:
+                                await old["ws"].close()
+                            except Exception:
+                                pass
                     device_id = did
                     mac = str(data.get("mac_address") or "").strip()
                     if mac:
@@ -479,6 +490,7 @@ async def ws_handler(
                 elif t == "connect" and role is None:
                     did = str(data.get("device_id") or "").strip()
                     password = str(data.get("password") or "")
+                    resume_token = str(data.get("resume_token") or "")
 
                     # Rate-limit: connect/phút/IP và /ID
                     if not state.rl_connect_ip.hit(ip):
@@ -545,8 +557,8 @@ async def ws_handler(
                     a["viewer_ip"] = ip   # lưu để ghi nhận auth fail về sau
                     a["bound"] = False
                     state.m_current_viewers += 1
-                    # Gửi password về agent để xác minh (relay không xem nội dung)
-                    await _try_send(a["ws"], {"type": "auth", "password": password, "viewer_ip": ip})
+                    # Gửi password hoặc resume_token về agent để xác minh (relay không xem nội dung)
+                    await _try_send(a["ws"], {"type": "auth", "password": password, "resume_token": resume_token, "viewer_ip": ip})
                     _log(logger, "INFO", "viewer_pairing", ip=ip,
                          device_id=did)
 
@@ -748,18 +760,25 @@ def make_app(args: argparse.Namespace) -> web.Application:
 
     routes.get("/ws")(_ws)
 
-    app = web.Application()
-    app.add_routes(routes)
-
     wd_path = os.path.abspath(args.web)
-    if os.path.isdir(wd_path):
-        async def index(_request: web.Request) -> web.Response:
+
+    @routes.get("/")
+    async def index_or_ws(request: web.Request) -> web.StreamResponse:
+        # Hỗ trợ kết nối WebSocket trực tiếp tới / (không bắt buộc /ws)
+        if request.headers.get("Upgrade", "").lower() == "websocket":
+            return await _ws(request)
+        if os.path.isdir(wd_path):
             html_path = os.path.join(wd_path, "index.html")
             return web.Response(
                 text=await _inject_mode(html_path),
                 content_type="text/html",
             )
-        app.router.add_get("/", index)
+        return web.Response(text="TouchLink Relay OK", content_type="text/plain")
+
+    app = web.Application()
+    app.add_routes(routes)
+
+    if os.path.isdir(wd_path):
         app.router.add_static("/static/", wd_path)
 
     return app

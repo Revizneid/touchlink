@@ -58,6 +58,24 @@ class TestSendInputBackend(unittest.TestCase):
             backend.type_text("𐍈")
         self.assertGreaterEqual(self.user32.SendInput.call_count, 4)
 
+    def test_mouse_down_and_click_moves_before_button_action(self):
+        import input_control
+        mock_backend = MagicMock()
+        with patch.object(input_control, "_get_backend", return_value=mock_backend):
+            input_control.mouse("down", 500, 300, button="left")
+            mock_backend.move_absolute.assert_called_with(500, 300)
+            mock_backend.mouse_down.assert_called_with("left")
+
+            mock_backend.reset_mock()
+            input_control.mouse("click", 800, 600, button="left", clicks=1)
+            mock_backend.move_absolute.assert_called_with(800, 600)
+            mock_backend.click.assert_called_with("left", 1)
+
+            mock_backend.reset_mock()
+            input_control.mouse("up", 850, 650, button="left")
+            mock_backend.move_absolute.assert_called_with(850, 650)
+            mock_backend.mouse_up.assert_called_with("left")
+
 
 if __name__ == "__main__":
     unittest.main()

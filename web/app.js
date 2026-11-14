@@ -828,7 +828,8 @@ function clampPan() {
 }
 function toImage(cx, cy) {
   var r = el.canvas.getBoundingClientRect();
-  var vw = r.width, vh = r.height;
+  var vw = el.canvas.clientWidth || r.width;
+  var vh = el.canvas.clientHeight || r.height;
   var s = st.fit * st.zoom;
   var ox = vw / 2 + st.panX - (st.fw * s) / 2;
   var oy = vh / 2 + st.panY - (st.fh * s) / 2;
@@ -838,9 +839,21 @@ function toImage(cx, cy) {
   };
 }
 
-/* ---------- input sending ---------- */
-var _sendQueue = Promise.resolve();
-function send(o) {
+/* ---------- input sending (với thuật toán Coalescing & Fast Base64) ---------- */
+function uint8ToBase64(u8) {
+  var CHUNK_SIZE = 0x8000;
+  var str = '';
+  for (var i = 0; i < u8.length; i += CHUNK_SIZE) {
+    str += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK_SIZE));
+  }
+  return btoa(str);
+}
+
+var _sendBusy = false;
+var _pendingMove = null;
+var _actionQueue = [];
+
+async function _sendRaw(o) {
   if (o && o.type === 'input' && st.rtcActive && st.rtcDc && st.rtcDc.readyState === 'open') {
     try {
       st.rtcDc.send(JSON.stringify(o));
@@ -851,29 +864,63 @@ function send(o) {
   if (!st.ws || st.ws.readyState !== 1) return;
   eventCount++;
   if (st.e2eActive && st.e2eKey && window.TouchLinkCrypto) {
-    _sendQueue = _sendQueue.then(async function () {
-      try {
-        st.e2eCounter = (st.e2eCounter || 0) + 1;
-        var jsonStr = JSON.stringify(o);
-        var cipherBytes = await window.TouchLinkCrypto.encryptE2E(
-          st.e2eKey, st.e2eRawKey, st.e2eTranscript, st.e2eCounter, jsonStr
-        );
-        var bin = '';
-        var len = cipherBytes.byteLength;
-        for (var i = 0; i < len; i++) bin += String.fromCharCode(cipherBytes[i]);
-        var b64 = btoa(bin);
-        if (st.ws && st.ws.readyState === 1) {
-          st.ws.send(JSON.stringify({ type: 'e2e', c: b64 }));
-        }
-      } catch (err) {
-        console.error('Lỗi mã hóa E2E:', err);
-      }
-    }).catch(function (err) {
-      console.error('Lỗi hàng đợi gửi:', err);
-    });
+    st.e2eCounter = (st.e2eCounter || 0) + 1;
+    var jsonStr = JSON.stringify(o);
+    var cipherBytes = await window.TouchLinkCrypto.encryptE2E(
+      st.e2eKey, st.e2eRawKey, st.e2eTranscript, st.e2eCounter, jsonStr
+    );
+    var b64 = uint8ToBase64(cipherBytes);
+    if (st.ws && st.ws.readyState === 1) {
+      st.ws.send(JSON.stringify({ type: 'e2e', c: b64 }));
+    }
   } else {
     st.ws.send(JSON.stringify(o));
   }
+}
+
+function _drainSendQueue() {
+  if (_sendBusy) return;
+  if (!st.ws || st.ws.readyState !== 1) {
+    _actionQueue.length = 0;
+    _pendingMove = null;
+    return;
+  }
+  var nextMsg = null;
+  if (_actionQueue.length > 0) {
+    nextMsg = _actionQueue.shift();
+  } else if (_pendingMove) {
+    nextMsg = _pendingMove;
+    _pendingMove = null;
+  }
+  if (!nextMsg) return;
+
+  _sendBusy = true;
+  _sendRaw(nextMsg).then(function () {
+    _sendBusy = false;
+    _drainSendQueue();
+  }).catch(function (err) {
+    console.error('Send error:', err);
+    _sendBusy = false;
+    _drainSendQueue();
+  });
+}
+
+function send(o) {
+  if (!o) return;
+  // Conflation: nếu là move, chỉ giữ vị trí mới nhất để không nghẽn hàng đợi mạng
+  if (o.type === 'input' && o.kind === 'mouse' && o.action === 'move') {
+    _pendingMove = o;
+    _drainSendQueue();
+    return;
+  }
+  // Các lệnh discrete (down, up, click, key, text, scroll, hello):
+  // Luôn chuyển move pending trước để con trỏ nhảy đúng chỗ
+  if (_pendingMove && o.type === 'input') {
+    _actionQueue.push(_pendingMove);
+    _pendingMove = null;
+  }
+  _actionQueue.push(o);
+  _drainSendQueue();
 }
 function sendMouse(action, x, y, extra) {
   var o = { type: 'input', kind: 'mouse', action: action, x: (x == null ? null : Math.round(x)), y: (y == null ? null : Math.round(y)) };
@@ -898,9 +945,10 @@ function clearSticky() {
   Array.prototype.forEach.call(document.querySelectorAll('.qk.mod'), function (b) { b.classList.remove('on'); });
 }
 
-/* ---------- pointer handling ---------- */
+/* ---------- pointer handling (Thuật toán điều khiển cảm ứng nâng cao) ---------- */
 var pointers = new Map();
-var single = { id: null, x0: 0, y0: 0, t0: 0, moved: false, longFired: false, holdTimer: null, downSent: false };
+var TAP_SLOP_PX = 8; // Ngưỡng deadzone chống rung tay và phân biệt chạm (tap) vs kéo (drag)
+var single = { id: null, x0: 0, y0: 0, t0: 0, moved: false, isDragging: false, longFired: false, holdTimer: null, downSent: false };
 var gesture = null;
 var lastTap = { t: 0, x: 0, y: 0 };
 var relPending = { dx: 0, dy: 0 }, relScheduled = false;
@@ -925,7 +973,13 @@ function flushRel() {
 el.canvas.addEventListener('pointerdown', function (e) {
   wakeTopbar();
   el.canvas.setPointerCapture(e.pointerId);
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
+  var now = Date.now();
+  pointers.set(e.pointerId, {
+    x: e.clientX, y: e.clientY,
+    prevX: e.clientX, prevY: e.clientY,
+    x0: e.clientX, y0: e.clientY,
+    t: now
+  });
   if (pointers.size === 2) {
     // bắt đầu gesture 2 ngón — hủy thao tác 1 ngón đang dang dở
     cancelSingle(e);
@@ -941,13 +995,16 @@ el.canvas.addEventListener('pointerdown', function (e) {
     return;
   }
   if (pointers.size > 2) return;
+
   // 1 ngón / chuột
   single.id = e.pointerId;
-  single.x0 = e.clientX; single.y0 = e.clientY; single.t0 = Date.now();
-  single.moved = false; single.longFired = false; single.downSent = false;
+  single.x0 = e.clientX; single.y0 = e.clientY; single.t0 = now;
+  single.moved = false; single.isDragging = false; single.longFired = false; single.downSent = false;
   var isMouse = e.pointerType === 'mouse';
   if (isMouse || st.mode === 'direct') {
     var p = toImage(e.clientX, e.clientY);
+    // Luôn đồng bộ con trỏ desktop tới vị trí chạm ngay lập tức
+    sendMouse('move', p.x, p.y);
     if (isMouse) {
       sendMouse('down', p.x, p.y, { button: e.button === 2 ? 'right' : (e.button === 1 ? 'middle' : 'left') });
       single.downSent = true;
@@ -955,17 +1012,17 @@ el.canvas.addEventListener('pointerdown', function (e) {
       sendMouse('down', p.x, p.y, { button: 'left' });
       single.downSent = true;
       single.holdTimer = setTimeout(function () {
-        if (!single.moved && single.id != null && !single.longFired) {
+        if (!single.isDragging && single.id != null && !single.longFired) {
           single.longFired = true;
           sendMouse('up', p.x, p.y, { button: 'left' });
           sendMouse('click', p.x, p.y, { button: 'right' });
           vib(30);
         }
-      }, 550);
+      }, 500);
     }
   } else {
-    // touchpad: chờ phân loại tap / giữ
-    var isSecondTap = (Date.now() - lastTap.t < 320) &&
+    // touchpad: chờ phân loại tap / double-tap drag / giữ chuột phải
+    var isSecondTap = (now - lastTap.t < 320) &&
       Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 60;
     single.holdTimer = setTimeout(function () {
       if (single.id != null && !single.moved) {
@@ -973,20 +1030,33 @@ el.canvas.addEventListener('pointerdown', function (e) {
           st.dragging = true;
           sendMouse('down', null, null, { button: 'left' });
           vib(15);
-        } else if (Date.now() - single.t0 > 550 && !single.longFired) {
+        } else if (Date.now() - single.t0 > 500 && !single.longFired) {
           single.longFired = true;
           sendMouse('click', null, null, { button: 'right' });
           vib(30);
         }
       }
-    }, isSecondTap ? 180 : 600);
+    }, isSecondTap ? 180 : 520);
   }
 });
 
 el.canvas.addEventListener('pointermove', function (e) {
   wakeTopbar();
   var pt = pointers.get(e.pointerId);
-  if (pt) { pt.x = e.clientX; pt.y = e.clientY; }
+  var prevX = pt ? (pt.prevX != null ? pt.prevX : pt.x) : e.clientX;
+  var prevY = pt ? (pt.prevY != null ? pt.prevY : pt.y) : e.clientY;
+  var prevT = pt ? (pt.t || Date.now()) : Date.now();
+  var now = Date.now();
+  var dt = Math.max(1, now - prevT);
+
+  if (pt) {
+    pt.prevX = pt.x;
+    pt.prevY = pt.y;
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    pt.t = now;
+  }
+
   if (gesture && pointers.size >= 2) {
     var pts = Array.from(pointers.values()).slice(0, 2);
     var dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
@@ -1018,37 +1088,42 @@ el.canvas.addEventListener('pointermove', function (e) {
     gesture.lastMid = mid; gesture.lastDist = dist;
     return;
   }
+
   if (e.pointerId !== single.id) return;
-  var moved = Math.hypot(e.clientX - single.x0, e.clientY - single.y0);
-  if (moved > 10 && !single.longFired) {
+  var movedDist = Math.hypot(e.clientX - single.x0, e.clientY - single.y0);
+  if (movedDist > TAP_SLOP_PX) {
     if (single.holdTimer) { clearTimeout(single.holdTimer); single.holdTimer = null; }
+    single.moved = true;
+    single.isDragging = true;
   }
-  if (moved > 6) single.moved = true;
-  if (st.mode === 'direct' || e.pointerType === 'mouse') {
-    if (single.longFired && e.pointerType !== 'mouse') return; // sau chuột phải thì thôi kéo
-    var p2 = toImage(e.clientX, e.clientY);
-    scheduleMove(p2);
-  } else {
-    // touchpad: di chuyển tương đối
-    if (pt) {
-      relPending.dx += (e.clientX - pt.x) * (st.sens / 10);
-      relPending.dy += (e.clientY - pt.y) * (st.sens / 10);
-      pt.x0 = pt.x; pt.y0 = pt.y;
-      if (!relScheduled) { relScheduled = true; requestAnimationFrame(flushRel); }
+
+  var isMouse = e.pointerType === 'mouse';
+  if (st.mode === 'direct' || isMouse) {
+    if (single.longFired && !isMouse) return; // sau chuột phải thì thôi kéo
+    // Chỉ gửi move khi đã vượt ngưỡng deadzone hoặc là chuột vật lý
+    if (single.isDragging || isMouse) {
+      var p2 = toImage(e.clientX, e.clientY);
+      sendMouse('move', p2.x, p2.y);
     }
+  } else {
+    // touchpad: thuật toán gia tốc đạn đạo (ballistic curve)
+    var rawDx = e.clientX - prevX;
+    var rawDy = e.clientY - prevY;
+    var speed = Math.hypot(rawDx, rawDy) / dt; // pixels / ms
+    var gain = 1.0;
+    if (speed < 0.15) {
+      gain = 0.85; // chế độ vi chỉnh (pixel-precise) khi di chậm
+    } else if (speed <= 1.2) {
+      gain = 1.0 + (speed - 0.15) * 1.15; // gia tốc tự nhiên khi lướt vừa
+    } else {
+      gain = Math.min(3.5, 2.2 + (speed - 1.2) * 1.3); // flick nhanh vượt toàn màn hình
+    }
+    var sensMultiplier = (st.sens || 10) / 10;
+    relPending.dx += rawDx * gain * sensMultiplier;
+    relPending.dy += rawDy * gain * sensMultiplier;
+    if (!relScheduled) { relScheduled = true; requestAnimationFrame(flushRel); }
   }
 });
-
-function scheduleMove(p) {
-  scheduleMove.last = p;
-  if (scheduleMove.scheduled) return;
-  scheduleMove.scheduled = true;
-  requestAnimationFrame(function () {
-    scheduleMove.scheduled = false;
-    var p3 = scheduleMove.last;
-    if (p3 && single.id != null) sendMouse('move', p3.x, p3.y);
-  });
-}
 
 function cancelSingle(e) {
   if (single.holdTimer) { clearTimeout(single.holdTimer); single.holdTimer = null; }
@@ -1057,7 +1132,7 @@ function cancelSingle(e) {
     sendMouse('up', p.x, p.y, { button: 'left' });
   }
   if (st.dragging) { sendMouse('up', null, null, { button: 'left' }); st.dragging = false; }
-  single.id = null; single.downSent = false;
+  single.id = null; single.downSent = false; single.isDragging = false;
 }
 
 el.canvas.addEventListener('pointerup', function (e) {
@@ -1069,14 +1144,24 @@ el.canvas.addEventListener('pointerup', function (e) {
   }
   if (e.pointerId !== single.id) return;
   if (single.holdTimer) { clearTimeout(single.holdTimer); single.holdTimer = null; }
-  var quick = (Date.now() - single.t0) < 250 && !single.moved;
-  if (e.pointerType === 'mouse') {
+
+  var duration = Date.now() - single.t0;
+  var quick = duration < 320 && !single.isDragging;
+  var isMouse = e.pointerType === 'mouse';
+
+  if (isMouse) {
     var p = toImage(e.clientX, e.clientY);
     sendMouse('up', p.x, p.y, { button: e.button === 2 ? 'right' : (e.button === 1 ? 'middle' : 'left') });
   } else if (st.mode === 'direct') {
     if (!single.longFired) {
-      var p2 = toImage(e.clientX, e.clientY);
-      sendMouse('up', p2.x, p2.y, { button: 'left' });
+      if (!single.isDragging && quick) {
+        // Chạm nhanh không kéo (clean tap): nhả tại đúng tọa độ ban đầu để chống lệch do rung tay
+        var p0 = toImage(single.x0, single.y0);
+        sendMouse('up', p0.x, p0.y, { button: 'left' });
+      } else {
+        var p2 = toImage(e.clientX, e.clientY);
+        sendMouse('up', p2.x, p2.y, { button: 'left' });
+      }
     }
   } else {
     // touchpad
@@ -1089,7 +1174,7 @@ el.canvas.addEventListener('pointerup', function (e) {
       vib(10);
     }
   }
-  single.id = null; single.downSent = false;
+  single.id = null; single.downSent = false; single.isDragging = false;
 });
 el.canvas.addEventListener('pointercancel', function (e) {
   pointers.delete(e.pointerId);

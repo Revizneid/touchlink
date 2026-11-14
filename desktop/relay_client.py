@@ -36,6 +36,23 @@ def _next_backoff(current: float) -> float:
     return min(current * 2, _BACKOFF_MAX) + random.uniform(0, _JITTER_MAX)
 
 
+def normalize_relay_url(url: str) -> str:
+    """Chuẩn hóa URL relay: hỗ trợ http/https/ws/wss và đảm bảo có /ws."""
+    u = (url or "").strip()
+    if not u:
+        return ""
+    if u.lower().startswith("http://"):
+        u = "ws://" + u[7:]
+    elif u.lower().startswith("https://"):
+        u = "wss://" + u[8:]
+    elif not u.lower().startswith(("ws://", "wss://")):
+        u = "wss://" + u
+    u = u.rstrip("/")
+    if not u.lower().endswith("/ws"):
+        u = u + "/ws"
+    return u
+
+
 class RelayClient:
     def __init__(self):
         self.task = None
@@ -48,6 +65,8 @@ class RelayClient:
         self._retry_delay: float | None = None  # override delay (e.g. ID đang bị giữ)
         self.e2e = None                         # E2EChannel cho phiên hiện tại
         self.e2e_fingerprint = ""               # Mã vân tay E2E 8 ký tự
+        self._msg_queue: asyncio.Queue | None = None
+        self._worker_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
     # Status
@@ -88,6 +107,14 @@ class RelayClient:
     async def _cleanup(self) -> None:
         self.e2e = None
         self.e2e_fingerprint = ""
+        if self._worker_task:
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+            self._worker_task = None
+        self._msg_queue = None
         if self.conn:
             await core.remove_client(self.conn, "(relay ngắt)")
             self.conn = None
@@ -105,6 +132,19 @@ class RelayClient:
             self.session = None
         # Không set stopped ở đây — _run() quyết định trạng thái tiếp theo
 
+    async def _process_viewer_queue(self) -> None:
+        """Xử lý tuần tự các message từ viewer theo đúng thứ tự FIFO (không bị đảo lộn)."""
+        while self.running and self._msg_queue is not None:
+            try:
+                msg = await self._msg_queue.get()
+                if self.conn:
+                    await core.handle_client_message(self.conn, msg)
+                self._msg_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                core.log(f"Relay client message error: {e}")
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
@@ -114,12 +154,14 @@ class RelayClient:
         while self.running:
             self._set_status("connecting", None)
             try:
-                self.session = aiohttp.ClientSession()
+                relay_url = normalize_relay_url(cfg.get("relay_url", ""))
+                self.session = aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=_CONNECT_TIMEOUT_S)
+                )
                 self.ws = await self.session.ws_connect(
-                    cfg.get("relay_url"),
+                    relay_url,
                     heartbeat=20,
                     timeout=aiohttp.ClientWSTimeout(
-                        total=_CONNECT_TIMEOUT_S,
                         ws_close=_WS_CLOSE_TIMEOUT_S,
                     ),
                 )
@@ -139,7 +181,10 @@ class RelayClient:
                     if d.get("type") == "registered":
                         pass  # OK
                     elif d.get("type") == "error":
-                        raise RuntimeError(d.get("message", "relay error"))
+                        err_msg = d.get("message", "relay error")
+                        if "đã đăng ký" in err_msg or "đã có máy khác" in err_msg:
+                            self._retry_delay = 10.0
+                        raise RuntimeError(err_msg)
                     # else: tiếp tục — có thể relay không gửi registered
                 elif first.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     raise ConnectionError("relay closed during register")
@@ -165,7 +210,7 @@ class RelayClient:
 
             except asyncio.CancelledError:
                 raise
-            except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError, OSError, RuntimeError, ValueError) as e:
+            except Exception as e:
                 err = str(e)
                 if err != self._last_err:
                     self._last_err = err
@@ -217,8 +262,10 @@ class RelayClient:
                     self.conn.caps = list(inner.get("caps") or [])
                     core.log(f"Relay viewer hello: v={self.conn.peer_v} caps={self.conn.peer_caps}")
                     await core.handle_client_message(self.conn, inner)
+                elif self._msg_queue is not None:
+                    await self._msg_queue.put(inner)
                 else:
-                    asyncio.create_task(core.handle_client_message(self.conn, inner))
+                    await core.handle_client_message(self.conn, inner)
         elif t == "send_wol":
             # Yêu cầu phát WoL magic packet trong mạng LAN nội bộ
             target_mac = str(data.get("target_mac") or "").strip()
@@ -237,20 +284,28 @@ class RelayClient:
                 self._retry_delay = 60.0
 
     async def _handle_auth(self, cfg: dict, data: dict) -> None:
-        """Xử lý yêu cầu auth từ relay: hỏi consent (nếu bật), xác minh mật khẩu."""
+        """Xử lý yêu cầu auth từ relay: hỏi consent (nếu bật), xác minh mật khẩu hoặc resume_token."""
         password = str(data.get("password") or "")
+        resume_token = str(data.get("resume_token") or "")
         viewer_ip = str(data.get("viewer_ip") or "relay viewer")
 
-        # Xác minh mật khẩu trước
-        ok = secure.verify_password(password, cfg.get("password_enc") or "")
+        # Xác minh mật khẩu hoặc resume_token
+        ok = False
+        auth_method = "relay_password"
+        if resume_token:
+            auth_method = "resume_token"
+            ok = secure.consume_resume_token(resume_token, str(cfg.get("device_id", "")))
+        elif password:
+            ok = secure.verify_password(password, cfg.get("password_enc") or "")
+
         if not ok:
             core.counters["auth_fails"] += 1
             try:
                 _audit.record_event(
                     event="auth_fail",
                     ip=viewer_ip,
-                    auth_method="relay_password",
-                    details={"reason": "wrong_password"},
+                    auth_method=auth_method,
+                    details={"reason": "invalid_credentials"},
                 )
             except Exception:
                 pass
@@ -278,7 +333,7 @@ class RelayClient:
                 _audit.record_event(
                     event="consent_denied",
                     ip=viewer_ip,
-                    auth_method="relay_password",
+                    auth_method=auth_method,
                     permission="deny",
                 )
             except Exception:
@@ -299,16 +354,28 @@ class RelayClient:
         if result == "view_only":
             conn.view_only = True
 
-        # Thiết lập E2EChannel nếu mật khẩu hợp lệ
+        self.conn = conn
+
+        # Khởi tạo queue tuần tự cho viewer
+        if self._worker_task:
+            self._worker_task.cancel()
+            self._worker_task = None
+        self._msg_queue = asyncio.Queue()
+        self._worker_task = asyncio.create_task(self._process_viewer_queue())
+
+        # Thiết lập E2EChannel nếu có password
         transcript = f"touchlink-relay:{cfg.get('device_id', '')}"
-        try:
-            from security.e2e import E2EChannel
-            self.e2e = E2EChannel.from_passcode("agent", password, transcript)
-            self.e2e_fingerprint = self.e2e.compute_fingerprint()
-            core.log(f"Relay E2E kích hoạt (fingerprint: {self.e2e_fingerprint})")
-            core.broadcast_event("history", ("relay", f"E2E bảo mật (Mã: {self.e2e_fingerprint})"))
-        except Exception as exc:
-            core.log(f"Không thể khởi tạo E2EChannel: {exc}")
+        if password:
+            try:
+                from security.e2e import E2EChannel
+                self.e2e = E2EChannel.from_passcode("agent", password, transcript)
+                self.e2e_fingerprint = self.e2e.compute_fingerprint()
+                core.log(f"Relay E2E kích hoạt (fingerprint: {self.e2e_fingerprint})")
+                core.broadcast_event("history", ("relay", f"E2E bảo mật (Mã: {self.e2e_fingerprint})"))
+            except Exception as exc:
+                core.log(f"Không thể khởi tạo E2EChannel: {exc}")
+                self.e2e = None
+        else:
             self.e2e = None
 
         auth_payload = core.auth_ok_payload()
@@ -316,8 +383,6 @@ class RelayClient:
             auth_payload["e2e"] = True
             auth_payload["e2e_fingerprint"] = self.e2e_fingerprint
             auth_payload["transcript"] = transcript
-
-        self.conn = conn
         await self.ws.send_json(
             {"type": "auth_result", "ok": True, "data": auth_payload}
         )

@@ -333,8 +333,6 @@ def serve_pipes(stop_evt, worker, safe_test):
             pass  # client đã connect trước khi ConnectNamedPipe gọi
         threading.Thread(target=_handle_conn, args=(pipe, worker, safe_test),
                          daemon=True).start()
-        threading.Thread(target=_handle_conn, args=(pipe, worker, safe_test),
-                         daemon=True).start()
 
 
 import pywintypes
