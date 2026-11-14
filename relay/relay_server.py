@@ -276,7 +276,7 @@ class RelayConfig:
         self.max_conns_total_ip: int = _int(
             "max_conns_total_ip", "RELAY_MAX_CONNS_TOTAL", 10
         )
-        self.pair_timeout_s: float = 30.0  # ghép cặp tối đa 30s
+        self.pair_timeout_s: float = 45.0  # ghép cặp tối đa 45s (đủ thời gian hiển thị consent dialog)
 
 
 # ---------------------------------------------------------------------------

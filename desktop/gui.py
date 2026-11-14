@@ -9,6 +9,7 @@ from tkinter import messagebox, ttk
 
 import capture
 import config as cfgmod
+import consent as consent_mod
 import core
 import overlay as overlay_mod
 import qrcode
@@ -72,6 +73,7 @@ class TouchLinkGUI(tk.Tk):
         self._overlay = overlay_mod.init(self, headless=False)
         self._overlay.set_disconnect_callback(self._disconnect_all_viewers)
         self._toast_after = None
+        consent_mod.register_gui_handler(self._show_consent_dialog)
         self.after(250, self._poll)
         self.show_page("dash")
         self._refresh_svc_status()
@@ -155,6 +157,116 @@ class TouchLinkGUI(tk.Tk):
         if self._toast_after:
             self.after_cancel(self._toast_after)
         self._toast_after = self.after(2800, frame.destroy)
+
+    def destroy(self):
+        try:
+            consent_mod.register_gui_handler(None)
+        except Exception:
+            pass
+        super().destroy()
+
+    def _show_consent_dialog(self, viewer_name: str, is_relay: bool, timeout_s: int, on_done):
+        """Hiển thị popup xác nhận kết nối mới từ viewer an toàn trên main Tk thread."""
+        self.after(0, lambda: self._create_consent_popup(viewer_name, is_relay, timeout_s, on_done))
+
+    def _create_consent_popup(self, viewer_name: str, is_relay: bool, timeout_s: int, on_done):
+        win = tk.Toplevel(self)
+        win.title("TouchLink — Yêu cầu kết nối")
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        try:
+            win.grab_set()  # modal
+        except Exception:
+            pass
+
+        BG = C["bg"]
+        CARD = C["card"]
+        FG = C["text"]
+        DIM = C["dim"]
+        WARN = C["warn"]
+        ACCENT = C["prim"]
+        DENY_C = C["err"]
+        win.configure(bg=BG)
+
+        BOLD = (F, 11, "bold")
+        NORM = (F, 10)
+
+        # Phát chuông thông báo
+        try:
+            self.bell()
+        except Exception:
+            pass
+
+        tk.Label(win, text="🔔  Yêu cầu kết nối mới", bg=BG, fg=WARN,
+                 font=(F, 13, "bold"), pady=10).pack(fill="x", padx=20)
+        src = ("Relay (Internet)" if is_relay else "Mạng LAN")
+        tk.Label(win, text=f"Nguồn: {src}", bg=BG, fg=DIM, font=NORM).pack()
+        tk.Label(win, text=viewer_name, bg=BG, fg=FG, font=BOLD, pady=4).pack()
+        tk.Label(win, text="muốn xem và điều khiển máy tính này.", bg=BG, fg=FG,
+                 font=NORM).pack(pady=(0, 8))
+
+        var_t = tk.StringVar(value=f"Tự động từ chối sau {timeout_s}s")
+        tk.Label(win, textvariable=var_t, bg=BG, fg=DIM, font=(F, 9)).pack()
+
+        sep = tk.Frame(win, bg=C["line"], height=1)
+        sep.pack(fill="x", padx=16, pady=8)
+
+        btn_frame = tk.Frame(win, bg=BG)
+        btn_frame.pack(fill="x", padx=20, pady=(0, 16))
+
+        answered = [False]
+
+        def _finish(res: str):
+            if answered[0]:
+                return
+            answered[0] = True
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            on_done(res)
+
+        def _style(bg, fg="#fff"):
+            return {"bg": bg, "fg": fg, "font": (F, 10, "bold"),
+                    "relief": "flat", "padx": 14, "pady": 6, "cursor": "hand2",
+                    "borderwidth": 0, "highlightthickness": 0}
+
+        tk.Button(btn_frame, text="✓ Cho phép", command=lambda: _finish("allow"),
+                  **_style(ACCENT)).pack(side="left", expand=True, fill="x", padx=(0, 4))
+        tk.Button(btn_frame, text="👁 Chỉ xem", command=lambda: _finish("view_only"),
+                  **_style("#6366f1")).pack(side="left", expand=True, fill="x", padx=4)
+        tk.Button(btn_frame, text="✗ Từ chối", command=lambda: _finish("deny"),
+                  **_style(DENY_C)).pack(side="left", expand=True, fill="x", padx=(4, 0))
+
+        win.update_idletasks()
+        w = max(380, win.winfo_reqwidth())
+        h = win.winfo_reqheight()
+        try:
+            x = self.winfo_x() + (self.winfo_width() - w) // 2
+            y = self.winfo_y() + (self.winfo_height() - h) // 2
+        except Exception:
+            x = (win.winfo_screenwidth() - w) // 2
+            y = (win.winfo_screenheight() - h) // 2
+        win.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
+
+        remaining = [timeout_s]
+
+        def _countdown():
+            if answered[0]:
+                return
+            remaining[0] -= 1
+            if remaining[0] <= 0:
+                var_t.set("Tự động từ chối!")
+                _finish("deny")
+            else:
+                var_t.set(f"Tự động từ chối sau {remaining[0]}s")
+                try:
+                    win.after(1000, _countdown)
+                except Exception:
+                    pass
+
+        win.after(1000, _countdown)
+        win.protocol("WM_DELETE_WINDOW", lambda: _finish("deny"))
 
     # ---------- header ----------
     def _build_header(self):

@@ -225,3 +225,24 @@ class TestConstants:
 
     def test_timeout_is_30s(self):
         assert consent_mod.CONSENT_TIMEOUT_S == 30
+
+
+# ---------------------------------------------------------------------------
+# 5. GUI Handler Registration
+# ---------------------------------------------------------------------------
+
+class TestGuiHandler:
+    async def test_gui_handler_dispatched(self):
+        called_args = []
+        def my_gui_handler(vname, is_relay, timeout_s, on_done):
+            called_args.append((vname, is_relay, timeout_s))
+            on_done("allow")
+
+        consent_mod.register_gui_handler(my_gui_handler)
+        try:
+            res = await consent_mod.ask_async("10.0.0.99", is_relay=True, cfg={}, headless=False)
+            assert res == "allow"
+            assert len(called_args) == 1
+            assert called_args[0] == ("10.0.0.99", True, 30)
+        finally:
+            consent_mod.register_gui_handler(None)
