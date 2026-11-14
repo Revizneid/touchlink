@@ -97,7 +97,18 @@ class WebRtcPeerSession:
         self.audio_track: Any = None
         self.data_channels: dict[str, Any] = {}
         self.ice_servers = ice_servers or (
-            [RTCIceServer(urls=["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"])]
+            [
+                RTCIceServer(urls=["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]),
+                RTCIceServer(
+                    urls=[
+                        "turn:openrelay.metered.ca:80",
+                        "turn:openrelay.metered.ca:443",
+                        "turn:openrelay.metered.ca:443?transport=tcp",
+                    ],
+                    username="openrelay",
+                    credential="openrelay",
+                ),
+            ]
             if _AIORTC_AVAILABLE else []
         )
         self._closed = False

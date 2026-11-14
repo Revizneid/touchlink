@@ -112,22 +112,18 @@ function applyViewportCompat() {
   var profile = getCompatProfile();
   var root = document.documentElement;
   var viewport = window.visualViewport;
-  if (profile.usesVisualViewport && viewport) {
-    var vh = Math.max(320, viewport.height || window.innerHeight);
-    root.style.setProperty('--app-vh', vh + 'px');
-    root.style.height = vh + 'px';
-    document.body.style.minHeight = vh + 'px';
-    var keyboardOffset = Math.max(0, window.innerHeight - viewport.height);
-    document.body.style.paddingBottom = (keyboardOffset > 0 && profile.family === 'ios') ? (keyboardOffset * 0.6) + 'px' : '';
-  } else {
-    root.style.setProperty('--app-vh', window.innerHeight + 'px');
-    root.style.height = window.innerHeight + 'px';
-    document.body.style.minHeight = window.innerHeight + 'px';
-    document.body.style.paddingBottom = '';
-  }
+  var vh = viewport ? Math.round(viewport.height) : window.innerHeight;
+  root.style.setProperty('--app-vh', vh + 'px');
+  // Không gán cứng inline height/minHeight vào html/body để tránh méo layout khi xoay màn hình
+  root.style.height = '';
+  document.body.style.height = '';
+  document.body.style.minHeight = '';
   if (profile.family === 'ios') {
+    var keyboardOffset = Math.max(0, window.innerHeight - (viewport ? viewport.height : window.innerHeight));
+    document.body.style.paddingBottom = (keyboardOffset > 0) ? (keyboardOffset * 0.6) + 'px' : '';
     document.body.classList.add('ios-device');
   } else {
+    document.body.style.paddingBottom = '';
     document.body.classList.remove('ios-device');
   }
 }
@@ -139,7 +135,15 @@ function bindViewportCompat() {
     window.visualViewport.addEventListener('scroll', applyViewportCompat);
   }
   window.addEventListener('resize', applyViewportCompat);
-  window.addEventListener('orientationchange', applyViewportCompat);
+  window.addEventListener('orientationchange', function () {
+    applyViewportCompat();
+    setTimeout(applyViewportCompat, 100);
+    setTimeout(applyViewportCompat, 300);
+    setTimeout(function () {
+      st.panX = 0; st.panY = 0;
+      redrawNeeded = true;
+    }, 350);
+  });
 
   // iOS Safari: Chặn pinch-zoom và double-tap zoom ngoài ý muốn ở cấp trang
   ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (evName) {
@@ -792,6 +796,11 @@ function onFrame(buf) {
 var ctx = el.canvas.getContext('2d');
 function draw() {
   requestAnimationFrame(draw);
+  var dpr = window.devicePixelRatio || 1;
+  var r = el.canvas.getBoundingClientRect();
+  var vw = Math.max(1, Math.round(r.width || window.innerWidth));
+  var vh = Math.max(1, Math.round(r.height || window.innerHeight));
+
   if (st.rtcActive) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, vw, vh);
@@ -799,11 +808,12 @@ function draw() {
   }
   if (!bmp || !st.fw) return;
   redrawNeeded = false;
-  var dpr = window.devicePixelRatio || 1;
-  var vw = el.canvas.clientWidth, vh = el.canvas.clientHeight;
-  if (el.canvas.width !== Math.round(vw * dpr) || el.canvas.height !== Math.round(vh * dpr)) {
-    el.canvas.width = Math.round(vw * dpr);
-    el.canvas.height = Math.round(vh * dpr);
+
+  var targetW = Math.round(vw * dpr);
+  var targetH = Math.round(vh * dpr);
+  if (el.canvas.width !== targetW || el.canvas.height !== targetH) {
+    el.canvas.width = targetW;
+    el.canvas.height = targetH;
   }
   st.fit = Math.min(vw / st.fw, vh / st.fh);
   var s = st.fit * st.zoom;
@@ -819,7 +829,9 @@ function draw() {
 requestAnimationFrame(draw);
 
 function clampPan() {
-  var vw = el.canvas.clientWidth, vh = el.canvas.clientHeight;
+  var r = el.canvas.getBoundingClientRect();
+  var vw = Math.max(1, Math.round(r.width || window.innerWidth));
+  var vh = Math.max(1, Math.round(r.height || window.innerHeight));
   var s = st.fit * st.zoom;
   var mx = Math.max(0, (st.fw * s - vw) / 2 + 30);
   var my = Math.max(0, (st.fh * s - vh) / 2 + 30);
@@ -828,8 +840,8 @@ function clampPan() {
 }
 function toImage(cx, cy) {
   var r = el.canvas.getBoundingClientRect();
-  var vw = el.canvas.clientWidth || r.width;
-  var vh = el.canvas.clientHeight || r.height;
+  var vw = Math.max(1, Math.round(r.width || window.innerWidth));
+  var vh = Math.max(1, Math.round(r.height || window.innerHeight));
   var s = st.fit * st.zoom;
   var ox = vw / 2 + st.panX - (st.fw * s) / 2;
   var oy = vh / 2 + st.panY - (st.fh * s) / 2;
@@ -1654,6 +1666,15 @@ async function startWebRTC() {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
+        {
+          urls: [
+            'turn:openrelay.metered.ca:80',
+            'turn:openrelay.metered.ca:443',
+            'turn:openrelay.metered.ca:443?transport=tcp',
+          ],
+          username: 'openrelay',
+          credential: 'openrelay',
+        },
       ],
     };
     var pc = new RTCPeerConnection(config);
